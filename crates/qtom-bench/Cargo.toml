@@ -1,0 +1,8 @@
+[package]
+name = "qtom-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+qtom-core = { path = "../qtom-core" }
