@@ -28,6 +28,7 @@ CUDA is intentionally not implemented yet. The CPU route is the correctness orac
 cp .env.example .env
 cargo test --workspace
 cargo run -p qtom-bench --release
+cargo run -p qtom-bench --release -- --stress
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
@@ -37,6 +38,8 @@ The benchmark runner prints CSV-style rows for the current CPU router across:
 - agent counts: `128`, `1024`, `8192`
 - top-k values: `1`, `4`, `8`
 - latency summaries: p50, p95, p99, max per routed task
+
+Use `--stress` to run the opt-in `65536`-agent scenario.
 
 ## Environment
 

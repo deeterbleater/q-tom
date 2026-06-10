@@ -2,15 +2,19 @@ use qtom_core::{
     BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, ScoreCoefficients, batch_metrics,
     generate_fixture,
 };
+use std::env;
 use std::time::{Duration, Instant};
 
 const AGENT_COUNTS: [usize; 3] = [128, 1024, 8192];
+const STRESS_AGENT_COUNTS: [usize; 1] = [65536];
 const TOP_K_VALUES: [usize; 3] = [1, 4, 8];
 
 fn main() {
+    let mode = BenchMode::from_args(env::args().skip(1));
     let project_config = ProjectConfig::from_env_and_dotenv(".env");
     println!(
-        "config local_model={} evaluator_model={} api_key_present={} default_k={} default_agents={}",
+        "config mode={} local_model={} evaluator_model={} api_key_present={} default_k={} default_agents={}",
+        mode.as_str(),
         project_config.local_model,
         project_config.evaluator_model,
         project_config.openai_api_key_present,
@@ -22,7 +26,7 @@ fn main() {
         "agents,tasks,dims,k,total_ms,routes_s,p50_us,p95_us,p99_us,max_us,ideal_unavailable,mean_delta,mean_radius"
     );
 
-    for agent_count in AGENT_COUNTS {
+    for &agent_count in mode.agent_counts() {
         for k in TOP_K_VALUES {
             run_scenario(FixtureConfig {
                 agent_count,
@@ -89,6 +93,7 @@ fn task_count_for(agent_count: usize) -> usize {
     match agent_count {
         128 => 128,
         1024 => 512,
+        65536 => 512,
         _ => 2048,
     }
 }
@@ -145,6 +150,36 @@ fn percentile(sorted: &[f64], percentile: f64) -> f64 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchMode {
+    Smoke,
+    Stress,
+}
+
+impl BenchMode {
+    fn from_args(args: impl IntoIterator<Item = String>) -> Self {
+        if args.into_iter().any(|arg| arg == "--stress") {
+            Self::Stress
+        } else {
+            Self::Smoke
+        }
+    }
+
+    fn agent_counts(self) -> &'static [usize] {
+        match self {
+            Self::Smoke => &AGENT_COUNTS,
+            Self::Stress => &STRESS_AGENT_COUNTS,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Smoke => "smoke",
+            Self::Stress => "stress",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +191,14 @@ mod tests {
         assert_eq!(percentile(&samples, 0.0), 1.0);
         assert_eq!(percentile(&samples, 1.0), 4.0);
         assert_eq!(percentile(&samples, 0.5), 2.5);
+    }
+
+    #[test]
+    fn stress_flag_selects_stress_mode() {
+        assert_eq!(
+            BenchMode::from_args(["--stress".to_string()]),
+            BenchMode::Stress
+        );
+        assert_eq!(BenchMode::from_args(Vec::<String>::new()), BenchMode::Smoke);
     }
 }

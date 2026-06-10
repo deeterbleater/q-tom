@@ -40,22 +40,19 @@ impl CpuRouter {
     ) -> Result<RoutingResult, RouteError> {
         self.validate_request(request, states)?;
 
-        let mut observed = Vec::with_capacity(self.agents.len());
-        let mut available = Vec::with_capacity(self.agents.len());
+        let mut observed_top_k = BoundedTopK::new(request.k, CandidateSort::Observed);
+        let mut available_top_k = BoundedTopK::new(request.k, CandidateSort::Available);
 
         for (agent, state) in self.agents.iter().zip(states.iter().copied()) {
             let candidate = score_agent(&request.vector, agent, state, self.coefficients)?;
-            observed.push(candidate.clone());
+            observed_top_k.push(candidate.clone());
             if candidate.available {
-                available.push(candidate);
+                available_top_k.push(candidate);
             }
         }
 
-        sort_candidates(&mut observed, CandidateSort::Observed);
-        sort_candidates(&mut available, CandidateSort::Available);
-
-        let observed_top_k = take_k(observed, request.k);
-        let mut available_top_k = take_k(available, request.k);
+        let observed_top_k = observed_top_k.into_vec();
+        let mut available_top_k = available_top_k.into_vec();
         let ideal_candidate_unavailable = observed_top_k
             .first()
             .map(|candidate| !candidate.available)
@@ -164,9 +161,36 @@ fn sort_candidates(candidates: &mut [RouteCandidate], sort: CandidateSort) {
     });
 }
 
-fn take_k(mut candidates: Vec<RouteCandidate>, k: usize) -> Vec<RouteCandidate> {
-    candidates.truncate(k);
-    candidates
+struct BoundedTopK {
+    k: usize,
+    sort: CandidateSort,
+    candidates: Vec<RouteCandidate>,
+}
+
+impl BoundedTopK {
+    fn new(k: usize, sort: CandidateSort) -> Self {
+        Self {
+            k,
+            sort,
+            candidates: Vec::with_capacity(k),
+        }
+    }
+
+    fn push(&mut self, candidate: RouteCandidate) {
+        if self.k == 0 {
+            return;
+        }
+
+        self.candidates.push(candidate);
+        sort_candidates(&mut self.candidates, self.sort);
+        if self.candidates.len() > self.k {
+            self.candidates.pop();
+        }
+    }
+
+    fn into_vec(self) -> Vec<RouteCandidate> {
+        self.candidates
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +279,37 @@ mod tests {
         assert_eq!(result.available_candidates.last().unwrap().agent_id, 42);
     }
 
+    #[test]
+    fn bounded_top_k_matches_full_sort_order() {
+        let candidates = vec![
+            candidate(5, 0.5, 0.9, true),
+            candidate(1, 0.1, 0.7, true),
+            candidate(4, 0.4, 0.4, true),
+            candidate(2, 0.2, 0.3, true),
+            candidate(3, 0.3, 0.2, true),
+        ];
+        let mut bounded = BoundedTopK::new(3, CandidateSort::Observed);
+        for candidate in candidates.clone() {
+            bounded.push(candidate);
+        }
+
+        let mut sorted = candidates;
+        sort_candidates(&mut sorted, CandidateSort::Observed);
+        sorted.truncate(3);
+
+        assert_eq!(
+            bounded
+                .into_vec()
+                .iter()
+                .map(|candidate| candidate.agent_id)
+                .collect::<Vec<_>>(),
+            sorted
+                .iter()
+                .map(|candidate| candidate.agent_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
     fn agent(id: u32, vector: &[f32]) -> AgentProfile {
         AgentProfile {
             id,
@@ -275,6 +330,24 @@ mod tests {
             k,
             fallback_generalist_id,
             radius_max_threshold: radius,
+        }
+    }
+
+    fn candidate(
+        agent_id: u32,
+        base_distance: f32,
+        effective_distance: f32,
+        available: bool,
+    ) -> RouteCandidate {
+        RouteCandidate {
+            agent_id,
+            effective_distance,
+            base_distance,
+            omega: 1.0,
+            queue_penalty: 0.0,
+            latency_penalty: 0.0,
+            cache_penalty: 0.0,
+            available,
         }
     }
 }
