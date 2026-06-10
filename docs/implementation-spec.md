@@ -445,16 +445,16 @@ Prototype API:
 ```rust
 pub trait RouterBackend {
     fn route_batch(
-        &mut self,
+        &self,
         requests: &[RoutingRequest],
-        state: &[AgentRuntimeState],
-    ) -> anyhow::Result<Vec<RoutingResult>>;
+        states: &[AgentRuntimeState],
+    ) -> Result<Vec<RoutingResult>, RouteError>;
 }
 ```
 
 Backends:
 
-- `CpuRouter`: always available.
+- `CpuRouter`: always available. It provides the correctness oracle, a single-request path, and an order-preserving batch path. The current implementation can route a batch with an explicit worker count for request-level CPU parallelism experiments.
 - `CudaRouter`: used on the RTX 4090 machine.
 - `SimRouter`: deterministic test harness.
 

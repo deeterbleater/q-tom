@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 const AGENT_COUNTS: [usize; 3] = [128, 1024, 8192];
 const STRESS_AGENT_COUNTS: [usize; 1] = [65536];
 const PROFILE_AGENT_COUNTS: [usize; 4] = [8192, 65536, 131072, 262144];
+const BATCH_PROFILE_AGENT_COUNTS: [usize; 3] = [8192, 65536, 262144];
 const PROFILE_DIMENSIONS: [usize; 2] = [16, 32];
 const TOP_K_VALUES: [usize; 3] = [1, 4, 8];
 
@@ -27,6 +28,7 @@ fn main() {
     match mode {
         BenchMode::Smoke | BenchMode::Stress => run_route_matrix(mode),
         BenchMode::Profile => run_profile_matrix(),
+        BenchMode::BatchProfile => run_batch_profile_matrix(),
     }
 }
 
@@ -65,6 +67,30 @@ fn run_profile_matrix() {
 
             run_scan_profile(config);
             run_route_profile(config);
+        }
+    }
+}
+
+fn run_batch_profile_matrix() {
+    println!(
+        "kernel,workers,debug_observed,agents,tasks,dims,k,total_ms,routes_s,candidates_s,gdim_ops_s,ideal_unavailable,mean_delta,mean_radius,checksum"
+    );
+
+    for agent_count in BATCH_PROFILE_AGENT_COUNTS {
+        for dimensions in PROFILE_DIMENSIONS {
+            let config = FixtureConfig {
+                agent_count,
+                task_count: profile_task_count_for(agent_count),
+                dimensions,
+                k: 8,
+                seed: scenario_seed(agent_count, dimensions),
+            };
+
+            for debug_observed in [true, false] {
+                for workers in batch_worker_counts(config.task_count) {
+                    run_batch_route_profile(config, workers, debug_observed);
+                }
+            }
         }
     }
 }
@@ -142,6 +168,31 @@ fn run_route_profile(config: FixtureConfig) {
     print_profile_report("route", config, start.elapsed(), latencies, checksum);
 }
 
+fn run_batch_route_profile(config: FixtureConfig, workers: usize, debug_observed: bool) {
+    let fixture = generate_fixture(config);
+    let router = CpuRouter::new(fixture.agents, ScoreCoefficients::default())
+        .with_debug_observed(debug_observed);
+    let actual_workers = workers.max(1).min(config.task_count.max(1));
+
+    let start = Instant::now();
+    let results = router
+        .route_batch_with_workers(&fixture.requests, &fixture.states, actual_workers)
+        .expect("fixture should be valid");
+    let total_elapsed = start.elapsed();
+
+    let metrics = batch_metrics(&results);
+    let checksum = checksum_results(&results);
+    print_batch_profile_report(
+        "route-batch",
+        config,
+        actual_workers,
+        debug_observed,
+        total_elapsed,
+        metrics,
+        checksum,
+    );
+}
+
 fn print_report(
     config: FixtureConfig,
     total_elapsed: Duration,
@@ -201,6 +252,41 @@ fn print_profile_report(
     );
 }
 
+fn print_batch_profile_report(
+    kernel: &str,
+    config: FixtureConfig,
+    workers: usize,
+    debug_observed: bool,
+    total_elapsed: Duration,
+    metrics: BatchMetrics,
+    checksum: f64,
+) {
+    let elapsed_secs = total_elapsed.as_secs_f64();
+    let routes_per_second = metrics.routes as f64 / elapsed_secs.max(f64::EPSILON);
+    let candidates_per_second =
+        (config.task_count * config.agent_count) as f64 / elapsed_secs.max(f64::EPSILON);
+    let gdim_ops_per_second = candidates_per_second * config.dimensions as f64 / 1_000_000_000.0;
+
+    println!(
+        "{},{},{},{},{},{},{},{:.3},{:.1},{:.1},{:.3},{},{:.6},{:.6},{:.6}",
+        kernel,
+        workers,
+        debug_observed,
+        config.agent_count,
+        config.task_count,
+        config.dimensions,
+        config.k,
+        elapsed_secs * 1000.0,
+        routes_per_second,
+        candidates_per_second,
+        gdim_ops_per_second,
+        metrics.ideal_unavailable_count,
+        metrics.mean_substitute_distance_delta,
+        metrics.mean_top_k_radius,
+        checksum
+    );
+}
+
 fn task_count_for(agent_count: usize) -> usize {
     match agent_count {
         128 => 128,
@@ -219,8 +305,30 @@ fn profile_task_count_for(agent_count: usize) -> usize {
     }
 }
 
+fn batch_worker_counts(task_count: usize) -> Vec<usize> {
+    let available = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let mut counts = vec![1, 2, available / 2, available];
+
+    counts
+        .iter_mut()
+        .for_each(|count| *count = (*count).max(1).min(task_count.max(1)));
+    counts.sort_unstable();
+    counts.dedup();
+    counts
+}
+
 fn scenario_seed(agent_count: usize, k: usize) -> u64 {
     0x5154_4f4d ^ ((agent_count as u64) << 8) ^ k as u64
+}
+
+fn checksum_results(results: &[qtom_core::RoutingResult]) -> f64 {
+    results
+        .iter()
+        .filter_map(|result| result.available_candidates.first())
+        .map(|candidate| candidate.base_distance as f64 + candidate.agent_id as f64)
+        .sum()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -276,6 +384,7 @@ enum BenchMode {
     Smoke,
     Stress,
     Profile,
+    BatchProfile,
 }
 
 impl BenchMode {
@@ -285,6 +394,7 @@ impl BenchMode {
             match arg.as_str() {
                 "--stress" => mode = Self::Stress,
                 "--profile" => mode = Self::Profile,
+                "--batch-profile" => mode = Self::BatchProfile,
                 _ => {}
             }
         }
@@ -296,6 +406,7 @@ impl BenchMode {
             Self::Smoke => &AGENT_COUNTS,
             Self::Stress => &STRESS_AGENT_COUNTS,
             Self::Profile => &PROFILE_AGENT_COUNTS,
+            Self::BatchProfile => &BATCH_PROFILE_AGENT_COUNTS,
         }
     }
 
@@ -304,6 +415,7 @@ impl BenchMode {
             Self::Smoke => "smoke",
             Self::Stress => "stress",
             Self::Profile => "profile",
+            Self::BatchProfile => "batch-profile",
         }
     }
 }
@@ -336,5 +448,22 @@ mod tests {
             BenchMode::from_args(["--profile".to_string()]),
             BenchMode::Profile
         );
+    }
+
+    #[test]
+    fn batch_profile_flag_selects_batch_profile_mode() {
+        assert_eq!(
+            BenchMode::from_args(["--batch-profile".to_string()]),
+            BenchMode::BatchProfile
+        );
+    }
+
+    #[test]
+    fn batch_worker_counts_are_unique_and_bounded() {
+        let counts = batch_worker_counts(3);
+
+        assert_eq!(counts[0], 1);
+        assert!(counts.windows(2).all(|window| window[0] < window[1]));
+        assert!(counts.iter().all(|count| *count <= 3));
     }
 }

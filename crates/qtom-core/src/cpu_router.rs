@@ -39,7 +39,14 @@ impl CpuRouter {
         states: &[AgentRuntimeState],
     ) -> Result<RoutingResult, RouteError> {
         self.validate_request(request, states)?;
+        self.route_one_validated(request, states)
+    }
 
+    fn route_one_validated(
+        &self,
+        request: &RoutingRequest,
+        states: &[AgentRuntimeState],
+    ) -> Result<RoutingResult, RouteError> {
         let mut observed_top_k = BoundedTopK::new(request.k, CandidateSort::Observed);
         let mut available_top_k = BoundedTopK::new(request.k, CandidateSort::Available);
 
@@ -96,9 +103,63 @@ impl CpuRouter {
         })
     }
 
+    pub fn route_batch_with_workers(
+        &self,
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+        workers: usize,
+    ) -> Result<Vec<RoutingResult>, RouteError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.validate_batch(requests, states)?;
+
+        let worker_count = workers.max(1).min(requests.len());
+        if worker_count == 1 {
+            return self.route_batch_validated_sequential(requests, states);
+        }
+
+        let chunk_size = requests.len().div_ceil(worker_count);
+        let partials = std::thread::scope(|scope| {
+            let handles = requests
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        let mut results = Vec::with_capacity(chunk.len());
+                        for request in chunk {
+                            results.push(self.route_one_validated(request, states)?);
+                        }
+                        Ok::<_, RouteError>(results)
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("route worker should not panic"))
+                .collect::<Vec<_>>()
+        });
+
+        let mut results = Vec::with_capacity(requests.len());
+        for partial in partials {
+            let mut chunk_results = partial?;
+            results.append(&mut chunk_results);
+        }
+
+        Ok(results)
+    }
+
     fn validate_request(
         &self,
         request: &RoutingRequest,
+        states: &[AgentRuntimeState],
+    ) -> Result<(), RouteError> {
+        self.validate_batch(std::slice::from_ref(request), states)
+    }
+
+    fn validate_batch(
+        &self,
+        requests: &[RoutingRequest],
         states: &[AgentRuntimeState],
     ) -> Result<(), RouteError> {
         if self.agents.is_empty() {
@@ -112,14 +173,6 @@ impl CpuRouter {
         }
 
         let expected = self.agents[0].vector.len();
-        if request.vector.len() != expected {
-            return Err(RouteError::DimensionMismatch {
-                expected,
-                actual: request.vector.len(),
-                context: "routing request",
-            });
-        }
-
         for agent in &self.agents {
             if agent.vector.len() != expected {
                 return Err(RouteError::DimensionMismatch {
@@ -130,7 +183,28 @@ impl CpuRouter {
             }
         }
 
+        for request in requests {
+            if request.vector.len() != expected {
+                return Err(RouteError::DimensionMismatch {
+                    expected,
+                    actual: request.vector.len(),
+                    context: "routing request",
+                });
+            }
+        }
+
         Ok(())
+    }
+
+    fn route_batch_validated_sequential(
+        &self,
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+    ) -> Result<Vec<RoutingResult>, RouteError> {
+        requests
+            .iter()
+            .map(|request| self.route_one_validated(request, states))
+            .collect()
     }
 }
 
@@ -140,10 +214,10 @@ impl RouterBackend for CpuRouter {
         requests: &[RoutingRequest],
         states: &[AgentRuntimeState],
     ) -> Result<Vec<RoutingResult>, RouteError> {
-        requests
-            .iter()
-            .map(|request| self.route_one(request, states))
-            .collect()
+        let workers = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1);
+        self.route_batch_with_workers(requests, states, workers)
     }
 }
 
@@ -401,6 +475,79 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.agent_id)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn parallel_batch_matches_single_worker_batch_order() {
+        let router = CpuRouter::new(
+            vec![
+                agent(1, &[0.0, 0.0]),
+                agent(2, &[0.1, 0.0]),
+                agent(3, &[1.0, 1.0]),
+                agent(4, &[0.2, 0.2]),
+            ],
+            ScoreCoefficients::default(),
+        );
+        let states = vec![
+            AgentRuntimeState::unavailable(),
+            AgentRuntimeState::available(),
+            AgentRuntimeState::available(),
+            AgentRuntimeState::available(),
+        ];
+        let requests = vec![
+            request(&[0.05, 0.0], 2, 999, 10.0),
+            request(&[0.15, 0.0], 2, 999, 10.0),
+            request(&[0.95, 1.0], 2, 999, 10.0),
+            request(&[0.25, 0.2], 2, 999, 10.0),
+        ];
+
+        let sequential = router
+            .route_batch_with_workers(&requests, &states, 1)
+            .unwrap();
+        let parallel = router
+            .route_batch_with_workers(&requests, &states, 8)
+            .unwrap();
+
+        assert_eq!(parallel, sequential);
+        assert_eq!(
+            parallel
+                .iter()
+                .map(|result| result.task_id)
+                .collect::<Vec<_>>(),
+            requests
+                .iter()
+                .map(|request| request.task_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn empty_batch_returns_empty_results() {
+        let router = CpuRouter::new(vec![agent(1, &[0.0, 0.0])], ScoreCoefficients::default());
+        let results = router
+            .route_batch_with_workers(&[], &[AgentRuntimeState::available()], 8)
+            .unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn batch_validates_request_dimensions_once_before_routing() {
+        let router = CpuRouter::new(vec![agent(1, &[0.0, 0.0])], ScoreCoefficients::default());
+        let requests = vec![request(&[0.0, 0.0, 0.0], 1, 999, 10.0)];
+
+        let error = router
+            .route_batch_with_workers(&requests, &[AgentRuntimeState::available()], 4)
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            RouteError::DimensionMismatch {
+                expected: 2,
+                actual: 3,
+                context: "routing request"
+            }
         );
     }
 

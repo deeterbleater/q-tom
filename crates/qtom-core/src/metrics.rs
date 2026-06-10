@@ -30,26 +30,31 @@ pub fn route_metrics(result: &RoutingResult) -> Option<RouteMetrics> {
 }
 
 pub fn batch_metrics(results: &[RoutingResult]) -> BatchMetrics {
+    let routes = results.len();
     let mut count = 0usize;
     let mut unavailable = 0usize;
     let mut substitute_sum = 0.0f32;
     let mut radius_sum = 0.0f32;
 
     for result in results {
+        unavailable += usize::from(result.ideal_candidate_unavailable);
         if let Some(metrics) = route_metrics(result) {
             count += 1;
-            unavailable += usize::from(metrics.ideal_candidate_unavailable);
             substitute_sum += metrics.substitute_distance_delta;
             radius_sum += metrics.top_k_radius;
         }
     }
 
     if count == 0 {
-        return BatchMetrics::default();
+        return BatchMetrics {
+            routes,
+            ideal_unavailable_count: unavailable,
+            ..BatchMetrics::default()
+        };
     }
 
     BatchMetrics {
-        routes: count,
+        routes,
         ideal_unavailable_count: unavailable,
         mean_substitute_distance_delta: substitute_sum / count as f32,
         mean_top_k_radius: radius_sum / count as f32,
@@ -97,6 +102,33 @@ mod tests {
         assert_eq!(metrics.radius_3, Some(0.4));
         assert_eq!(metrics.top_k_radius, 0.8);
         assert!(metrics.ideal_candidate_unavailable);
+    }
+
+    #[test]
+    fn batch_metrics_counts_routes_without_debug_telemetry() {
+        let results = vec![
+            RoutingResult {
+                task_id: 1,
+                available_candidates: vec![candidate(2, 0.2, true)],
+                used_fallback: false,
+                ideal_candidate_unavailable: true,
+                debug: None,
+            },
+            RoutingResult {
+                task_id: 2,
+                available_candidates: vec![candidate(3, 0.3, true)],
+                used_fallback: false,
+                ideal_candidate_unavailable: false,
+                debug: None,
+            },
+        ];
+
+        let metrics = batch_metrics(&results);
+
+        assert_eq!(metrics.routes, 2);
+        assert_eq!(metrics.ideal_unavailable_count, 1);
+        assert_eq!(metrics.mean_substitute_distance_delta, 0.0);
+        assert_eq!(metrics.mean_top_k_radius, 0.0);
     }
 
     fn candidate(agent_id: u32, base_distance: f32, available: bool) -> RouteCandidate {
