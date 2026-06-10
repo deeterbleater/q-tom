@@ -153,6 +153,20 @@ pub struct AgentLabels {
 
 For Prototype 1, `model_profile` can be constant. For API-based inference later, it becomes a real routing dimension.
 
+### 5.1.1 Packed Route Table
+
+`AgentProfile` is the host-side registry format. The hot routing path should use a packed route table:
+
+```rust
+pub struct AgentRouteTable {
+    agent_ids: Vec<u32>,
+    vectors: Vec<f32>, // row-major [agent_count, dimensions]
+    dimensions: usize,
+}
+```
+
+The CPU router uses this packed table as its internal scan source. This keeps the correctness oracle closer to the future CUDA buffer layout while preserving ergonomic registry structs at the API boundary.
+
 ### 5.2 Live State
 
 ```rust
@@ -355,6 +369,7 @@ Build the canonical routing implementation in Rust.
 
 Requirements:
 
+- Stores agent IDs and vectors in a packed row-major route table.
 - Implements the exact score function.
 - Handles unavailable agents.
 - Applies fallback threshold.

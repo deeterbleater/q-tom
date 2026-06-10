@@ -6,10 +6,11 @@ The current implementation is the Phase 0/1 truth source:
 
 - deterministic synthetic fixtures
 - CPU top-k router
+- packed row-major agent route table
 - order-preserving batch router with configurable worker count
 - observed-vs-available candidate output
 - geometric substitute-quality metrics
-- benchmark runners for latency, scan overhead, and batch throughput
+- benchmark runners for latency, scan overhead, memory layout, and batch throughput
 
 CUDA is intentionally not implemented yet. The CPU route is the correctness oracle for the future RTX 4090 backend.
 
@@ -31,6 +32,7 @@ cargo test --workspace
 cargo run -p qtom-bench --release
 cargo run -p qtom-bench --release -- --stress
 cargo run -p qtom-bench --release -- --profile
+cargo run -p qtom-bench --release -- --layout-profile
 cargo run -p qtom-bench --release -- --batch-profile
 ```
 
@@ -45,6 +47,8 @@ The benchmark runner prints CSV-style rows for the current CPU router across:
 Use `--stress` to run the opt-in `65536`-agent scenario.
 
 Use `--profile` to compare raw nearest-distance scanning against the full CPU router. This helps isolate whether the current bottleneck is the vector scan itself or router bookkeeping.
+
+Use `--layout-profile` to compare legacy agent-struct scans against the packed row-major agent table used by the CPU router.
 
 Use `--batch-profile` to compare order-preserving batch routing across worker counts with observed-candidate debug telemetry enabled and disabled. This helps isolate request-level parallelism from observability/materialization overhead.
 

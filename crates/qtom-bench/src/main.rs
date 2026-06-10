@@ -1,6 +1,6 @@
 use qtom_core::{
-    BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, ScoreCoefficients, batch_metrics,
-    generate_fixture, score::dist_sq,
+    AgentRouteTable, BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, ScoreCoefficients,
+    batch_metrics, generate_fixture, score::dist_sq,
 };
 use std::env;
 use std::time::{Duration, Instant};
@@ -29,6 +29,7 @@ fn main() {
         BenchMode::Smoke | BenchMode::Stress => run_route_matrix(mode),
         BenchMode::Profile => run_profile_matrix(),
         BenchMode::BatchProfile => run_batch_profile_matrix(),
+        BenchMode::LayoutProfile => run_layout_profile_matrix(),
     }
 }
 
@@ -67,6 +68,27 @@ fn run_profile_matrix() {
 
             run_scan_profile(config);
             run_route_profile(config);
+        }
+    }
+}
+
+fn run_layout_profile_matrix() {
+    println!(
+        "kernel,agents,tasks,dims,k,total_ms,routes_s,candidates_s,gdim_ops_s,p50_us,p95_us,p99_us,max_us,checksum"
+    );
+
+    for agent_count in PROFILE_AGENT_COUNTS {
+        for dimensions in PROFILE_DIMENSIONS {
+            let config = FixtureConfig {
+                agent_count,
+                task_count: profile_task_count_for(agent_count),
+                dimensions,
+                k: 8,
+                seed: scenario_seed(agent_count, dimensions),
+            };
+
+            run_aos_scan_profile("scan-aos", config);
+            run_packed_scan_profile("scan-packed", config);
         }
     }
 }
@@ -120,6 +142,10 @@ fn run_scenario(config: FixtureConfig) {
 }
 
 fn run_scan_profile(config: FixtureConfig) {
+    run_aos_scan_profile("scan", config);
+}
+
+fn run_aos_scan_profile(kernel: &str, config: FixtureConfig) {
     let fixture = generate_fixture(config);
     let mut latencies = Vec::with_capacity(fixture.requests.len());
     let start = Instant::now();
@@ -142,7 +168,49 @@ fn run_scan_profile(config: FixtureConfig) {
         latencies.push(route_start.elapsed());
     }
 
-    print_profile_report("scan", config, start.elapsed(), latencies, checksum);
+    print_profile_report(kernel, config, start.elapsed(), latencies, checksum);
+}
+
+fn run_packed_scan_profile(kernel: &str, config: FixtureConfig) {
+    let fixture = generate_fixture(config);
+    let route_table =
+        AgentRouteTable::from_agent_slice(&fixture.agents).expect("fixture should be valid");
+    let mut latencies = Vec::with_capacity(fixture.requests.len());
+    let start = Instant::now();
+    let mut checksum = 0.0f64;
+
+    for request in &fixture.requests {
+        let route_start = Instant::now();
+        let mut best_agent = 0u32;
+        let mut best_distance = f32::INFINITY;
+
+        if route_table.dimensions() == 0 {
+            for index in 0..route_table.len() {
+                let distance = dist_sq(&request.vector, route_table.vector(index));
+                if distance < best_distance {
+                    best_distance = distance;
+                    best_agent = route_table.agent_id(index);
+                }
+            }
+        } else {
+            for (agent_id, agent_vector) in route_table.agent_ids().iter().copied().zip(
+                route_table
+                    .packed_vectors()
+                    .chunks_exact(route_table.dimensions()),
+            ) {
+                let distance = dist_sq(&request.vector, agent_vector);
+                if distance < best_distance {
+                    best_distance = distance;
+                    best_agent = agent_id;
+                }
+            }
+        }
+
+        checksum += best_distance as f64 + best_agent as f64;
+        latencies.push(route_start.elapsed());
+    }
+
+    print_profile_report(kernel, config, start.elapsed(), latencies, checksum);
 }
 
 fn run_route_profile(config: FixtureConfig) {
@@ -385,6 +453,7 @@ enum BenchMode {
     Stress,
     Profile,
     BatchProfile,
+    LayoutProfile,
 }
 
 impl BenchMode {
@@ -395,6 +464,7 @@ impl BenchMode {
                 "--stress" => mode = Self::Stress,
                 "--profile" => mode = Self::Profile,
                 "--batch-profile" => mode = Self::BatchProfile,
+                "--layout-profile" => mode = Self::LayoutProfile,
                 _ => {}
             }
         }
@@ -407,6 +477,7 @@ impl BenchMode {
             Self::Stress => &STRESS_AGENT_COUNTS,
             Self::Profile => &PROFILE_AGENT_COUNTS,
             Self::BatchProfile => &BATCH_PROFILE_AGENT_COUNTS,
+            Self::LayoutProfile => &PROFILE_AGENT_COUNTS,
         }
     }
 
@@ -416,6 +487,7 @@ impl BenchMode {
             Self::Stress => "stress",
             Self::Profile => "profile",
             Self::BatchProfile => "batch-profile",
+            Self::LayoutProfile => "layout-profile",
         }
     }
 }
@@ -455,6 +527,14 @@ mod tests {
         assert_eq!(
             BenchMode::from_args(["--batch-profile".to_string()]),
             BenchMode::BatchProfile
+        );
+    }
+
+    #[test]
+    fn layout_profile_flag_selects_layout_profile_mode() {
+        assert_eq!(
+            BenchMode::from_args(["--layout-profile".to_string()]),
+            BenchMode::LayoutProfile
         );
     }
 

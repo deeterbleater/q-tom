@@ -31,27 +31,17 @@ pub fn score_agent(
         });
     }
 
-    let base_distance = dist_sq(task_vector, &agent.vector);
-    let queue_penalty = coefficients.alpha_queue * state.queue_depth_norm;
-    let latency_penalty = coefficients.beta_latency * state.latency_norm;
-    let cache_penalty = coefficients.gamma_cache * state.cache_pressure_norm;
-    let omega = 1.0 + queue_penalty + latency_penalty + cache_penalty;
-    let available = state.is_available();
-    let effective_distance = if available {
-        base_distance * omega
-    } else {
-        f32::INFINITY
-    };
+    let score = score_components_for_vector(task_vector, &agent.vector, state, coefficients);
 
     Ok(RouteCandidate {
         agent_id: agent.id,
-        effective_distance,
-        base_distance,
-        omega,
-        queue_penalty,
-        latency_penalty,
-        cache_penalty,
-        available,
+        effective_distance: score.effective_distance,
+        base_distance: score.base_distance,
+        omega: score.omega,
+        queue_penalty: score.queue_penalty,
+        latency_penalty: score.latency_penalty,
+        cache_penalty: score.cache_penalty,
+        available: score.available,
     })
 }
 
@@ -69,7 +59,23 @@ pub fn score_components(
         });
     }
 
-    let base_distance = dist_sq(task_vector, &agent.vector);
+    Ok(score_components_for_vector(
+        task_vector,
+        &agent.vector,
+        state,
+        coefficients,
+    ))
+}
+
+pub fn score_components_for_vector(
+    task_vector: &[f32],
+    agent_vector: &[f32],
+    state: AgentRuntimeState,
+    coefficients: ScoreCoefficients,
+) -> ScoreComponents {
+    debug_assert_eq!(task_vector.len(), agent_vector.len());
+
+    let base_distance = dist_sq(task_vector, agent_vector);
     let queue_penalty = coefficients.alpha_queue * state.queue_depth_norm;
     let latency_penalty = coefficients.beta_latency * state.latency_norm;
     let cache_penalty = coefficients.gamma_cache * state.cache_pressure_norm;
@@ -81,7 +87,7 @@ pub fn score_components(
         f32::INFINITY
     };
 
-    Ok(ScoreComponents {
+    ScoreComponents {
         base_distance,
         effective_distance,
         omega,
@@ -89,7 +95,7 @@ pub fn score_components(
         latency_penalty,
         cache_penalty,
         available,
-    })
+    }
 }
 
 pub fn dist_sq(lhs: &[f32], rhs: &[f32]) -> f32 {

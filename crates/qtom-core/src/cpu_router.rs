@@ -1,4 +1,5 @@
-use crate::score::{ScoreCoefficients, ScoreComponents, score_components};
+use crate::route_table::AgentRouteTable;
+use crate::score::{ScoreCoefficients, ScoreComponents, score_components_for_vector};
 use crate::types::{
     AgentProfile, AgentRuntimeState, RouteCandidate, RouteDebugInfo, RouteError, RoutingRequest,
     RoutingResult,
@@ -14,7 +15,7 @@ pub trait RouterBackend {
 
 #[derive(Clone, Debug)]
 pub struct CpuRouter {
-    agents: Vec<AgentProfile>,
+    route_table: Result<AgentRouteTable, RouteError>,
     coefficients: ScoreCoefficients,
     debug_observed: bool,
 }
@@ -22,7 +23,7 @@ pub struct CpuRouter {
 impl CpuRouter {
     pub fn new(agents: Vec<AgentProfile>, coefficients: ScoreCoefficients) -> Self {
         Self {
-            agents,
+            route_table: AgentRouteTable::from_agents(agents),
             coefficients,
             debug_observed: true,
         }
@@ -38,24 +39,52 @@ impl CpuRouter {
         request: &RoutingRequest,
         states: &[AgentRuntimeState],
     ) -> Result<RoutingResult, RouteError> {
-        self.validate_request(request, states)?;
-        self.route_one_validated(request, states)
+        let route_table = self.validate_request(request, states)?;
+        self.route_one_validated(request, states, route_table)
     }
 
     fn route_one_validated(
         &self,
         request: &RoutingRequest,
         states: &[AgentRuntimeState],
+        route_table: &AgentRouteTable,
     ) -> Result<RoutingResult, RouteError> {
         let mut observed_top_k = BoundedTopK::new(request.k, CandidateSort::Observed);
         let mut available_top_k = BoundedTopK::new(request.k, CandidateSort::Available);
 
-        for (agent, state) in self.agents.iter().zip(states.iter().copied()) {
-            let score = score_components(&request.vector, agent, state, self.coefficients)?;
-            let candidate = CompactCandidate::from_score(agent.id, score);
-            observed_top_k.push(candidate);
-            if candidate.available {
-                available_top_k.push(candidate);
+        if route_table.dimensions() == 0 {
+            for (index, state) in states.iter().copied().enumerate() {
+                push_scored_candidate(
+                    &request.vector,
+                    self.coefficients,
+                    route_table.agent_id(index),
+                    route_table.vector(index),
+                    state,
+                    &mut observed_top_k,
+                    &mut available_top_k,
+                );
+            }
+        } else {
+            for ((agent_id, agent_vector), state) in route_table
+                .agent_ids()
+                .iter()
+                .copied()
+                .zip(
+                    route_table
+                        .packed_vectors()
+                        .chunks_exact(route_table.dimensions()),
+                )
+                .zip(states.iter().copied())
+            {
+                push_scored_candidate(
+                    &request.vector,
+                    self.coefficients,
+                    agent_id,
+                    agent_vector,
+                    state,
+                    &mut observed_top_k,
+                    &mut available_top_k,
+                );
             }
         }
 
@@ -112,11 +141,11 @@ impl CpuRouter {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
-        self.validate_batch(requests, states)?;
+        let route_table = self.validate_batch(requests, states)?;
 
         let worker_count = workers.max(1).min(requests.len());
         if worker_count == 1 {
-            return self.route_batch_validated_sequential(requests, states);
+            return self.route_batch_validated_sequential(requests, states, route_table);
         }
 
         let chunk_size = requests.len().div_ceil(worker_count);
@@ -127,7 +156,7 @@ impl CpuRouter {
                     scope.spawn(move || {
                         let mut results = Vec::with_capacity(chunk.len());
                         for request in chunk {
-                            results.push(self.route_one_validated(request, states)?);
+                            results.push(self.route_one_validated(request, states, route_table)?);
                         }
                         Ok::<_, RouteError>(results)
                     })
@@ -153,7 +182,7 @@ impl CpuRouter {
         &self,
         request: &RoutingRequest,
         states: &[AgentRuntimeState],
-    ) -> Result<(), RouteError> {
+    ) -> Result<&AgentRouteTable, RouteError> {
         self.validate_batch(std::slice::from_ref(request), states)
     }
 
@@ -161,28 +190,19 @@ impl CpuRouter {
         &self,
         requests: &[RoutingRequest],
         states: &[AgentRuntimeState],
-    ) -> Result<(), RouteError> {
-        if self.agents.is_empty() {
+    ) -> Result<&AgentRouteTable, RouteError> {
+        let route_table = self.route_table.as_ref().map_err(Clone::clone)?;
+        if route_table.is_empty() {
             return Err(RouteError::EmptyAgents);
         }
-        if self.agents.len() != states.len() {
+        if route_table.len() != states.len() {
             return Err(RouteError::StateLengthMismatch {
-                agents: self.agents.len(),
+                agents: route_table.len(),
                 states: states.len(),
             });
         }
 
-        let expected = self.agents[0].vector.len();
-        for agent in &self.agents {
-            if agent.vector.len() != expected {
-                return Err(RouteError::DimensionMismatch {
-                    expected,
-                    actual: agent.vector.len(),
-                    context: "agent vector",
-                });
-            }
-        }
-
+        let expected = route_table.dimensions();
         for request in requests {
             if request.vector.len() != expected {
                 return Err(RouteError::DimensionMismatch {
@@ -193,17 +213,18 @@ impl CpuRouter {
             }
         }
 
-        Ok(())
+        Ok(route_table)
     }
 
     fn route_batch_validated_sequential(
         &self,
         requests: &[RoutingRequest],
         states: &[AgentRuntimeState],
+        route_table: &AgentRouteTable,
     ) -> Result<Vec<RoutingResult>, RouteError> {
         requests
             .iter()
-            .map(|request| self.route_one_validated(request, states))
+            .map(|request| self.route_one_validated(request, states, route_table))
             .collect()
     }
 }
@@ -218,6 +239,23 @@ impl RouterBackend for CpuRouter {
             .map(usize::from)
             .unwrap_or(1);
         self.route_batch_with_workers(requests, states, workers)
+    }
+}
+
+fn push_scored_candidate(
+    request_vector: &[f32],
+    coefficients: ScoreCoefficients,
+    agent_id: u32,
+    agent_vector: &[f32],
+    state: AgentRuntimeState,
+    observed_top_k: &mut BoundedTopK,
+    available_top_k: &mut BoundedTopK,
+) {
+    let score = score_components_for_vector(request_vector, agent_vector, state, coefficients);
+    let candidate = CompactCandidate::from_score(agent_id, score);
+    observed_top_k.push(candidate);
+    if candidate.available {
+        available_top_k.push(candidate);
     }
 }
 
@@ -547,6 +585,33 @@ mod tests {
                 expected: 2,
                 actual: 3,
                 context: "routing request"
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_agent_vector_dimensions_are_reported_on_route() {
+        let router = CpuRouter::new(
+            vec![agent(1, &[0.0]), agent(2, &[0.0, 1.0])],
+            ScoreCoefficients::default(),
+        );
+
+        let error = router
+            .route_one(
+                &request(&[0.0], 1, 999, 10.0),
+                &[
+                    AgentRuntimeState::available(),
+                    AgentRuntimeState::available(),
+                ],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            RouteError::DimensionMismatch {
+                expected: 1,
+                actual: 2,
+                context: "agent vector"
             }
         );
     }
