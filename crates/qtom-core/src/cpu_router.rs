@@ -242,6 +242,7 @@ impl RouterBackend for CpuRouter {
     }
 }
 
+#[inline(always)]
 fn push_scored_candidate(
     request_vector: &[f32],
     coefficients: ScoreCoefficients,

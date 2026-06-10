@@ -7,6 +7,7 @@ The current implementation is the Phase 0/1 truth source:
 - deterministic synthetic fixtures
 - CPU top-k router
 - packed row-major agent route table
+- blocked distance kernel for small fixed-width vectors
 - order-preserving batch router with configurable worker count
 - observed-vs-available candidate output
 - geometric substitute-quality metrics
@@ -48,7 +49,7 @@ Use `--stress` to run the opt-in `65536`-agent scenario.
 
 Use `--profile` to compare raw nearest-distance scanning against the full CPU router. This helps isolate whether the current bottleneck is the vector scan itself or router bookkeeping.
 
-Use `--layout-profile` to compare legacy agent-struct scans against the packed row-major agent table used by the CPU router.
+Use `--layout-profile` to compare legacy agent-struct scans, packed row-major scans, and blocked distance-kernel scans.
 
 Use `--batch-profile` to compare order-preserving batch routing across worker counts with observed-candidate debug telemetry enabled and disabled. This helps isolate request-level parallelism from observability/materialization overhead.
 

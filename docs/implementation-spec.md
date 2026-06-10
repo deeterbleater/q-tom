@@ -165,7 +165,7 @@ pub struct AgentRouteTable {
 }
 ```
 
-The CPU router uses this packed table as its internal scan source. This keeps the correctness oracle closer to the future CUDA buffer layout while preserving ergonomic registry structs at the API boundary.
+The CPU router uses this packed table as its internal scan source. Distance scoring uses blocked accumulation over four-float chunks so LLVM can schedule the small fixed-width vector math more effectively. This keeps the correctness oracle closer to the future CUDA buffer layout while preserving ergonomic registry structs at the API boundary.
 
 ### 5.2 Live State
 
@@ -370,6 +370,7 @@ Build the canonical routing implementation in Rust.
 Requirements:
 
 - Stores agent IDs and vectors in a packed row-major route table.
+- Uses a blocked distance kernel for `d = 16` and `d = 32` style vectors.
 - Implements the exact score function.
 - Handles unavailable agents.
 - Applies fallback threshold.

@@ -1,6 +1,7 @@
 use qtom_core::{
     AgentRouteTable, BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, ScoreCoefficients,
-    batch_metrics, generate_fixture, score::dist_sq,
+    batch_metrics, generate_fixture,
+    score::{dist_sq, dist_sq_blocked},
 };
 use std::env;
 use std::time::{Duration, Instant};
@@ -87,8 +88,10 @@ fn run_layout_profile_matrix() {
                 seed: scenario_seed(agent_count, dimensions),
             };
 
-            run_aos_scan_profile("scan-aos", config);
-            run_packed_scan_profile("scan-packed", config);
+            run_aos_scan_profile("scan-aos", config, dist_sq);
+            run_aos_scan_profile("scan-aos-blocked", config, dist_sq_blocked);
+            run_packed_scan_profile("scan-packed", config, dist_sq);
+            run_packed_scan_profile("scan-packed-blocked", config, dist_sq_blocked);
         }
     }
 }
@@ -142,10 +145,13 @@ fn run_scenario(config: FixtureConfig) {
 }
 
 fn run_scan_profile(config: FixtureConfig) {
-    run_aos_scan_profile("scan", config);
+    run_aos_scan_profile("scan", config, dist_sq);
 }
 
-fn run_aos_scan_profile(kernel: &str, config: FixtureConfig) {
+fn run_aos_scan_profile<D>(kernel: &str, config: FixtureConfig, distance: D)
+where
+    D: Fn(&[f32], &[f32]) -> f32 + Copy,
+{
     let fixture = generate_fixture(config);
     let mut latencies = Vec::with_capacity(fixture.requests.len());
     let start = Instant::now();
@@ -157,7 +163,7 @@ fn run_aos_scan_profile(kernel: &str, config: FixtureConfig) {
         let mut best_distance = f32::INFINITY;
 
         for agent in &fixture.agents {
-            let distance = dist_sq(&request.vector, &agent.vector);
+            let distance = distance(&request.vector, &agent.vector);
             if distance < best_distance {
                 best_distance = distance;
                 best_agent = agent.id;
@@ -171,7 +177,10 @@ fn run_aos_scan_profile(kernel: &str, config: FixtureConfig) {
     print_profile_report(kernel, config, start.elapsed(), latencies, checksum);
 }
 
-fn run_packed_scan_profile(kernel: &str, config: FixtureConfig) {
+fn run_packed_scan_profile<D>(kernel: &str, config: FixtureConfig, distance: D)
+where
+    D: Fn(&[f32], &[f32]) -> f32 + Copy,
+{
     let fixture = generate_fixture(config);
     let route_table =
         AgentRouteTable::from_agent_slice(&fixture.agents).expect("fixture should be valid");
@@ -186,7 +195,7 @@ fn run_packed_scan_profile(kernel: &str, config: FixtureConfig) {
 
         if route_table.dimensions() == 0 {
             for index in 0..route_table.len() {
-                let distance = dist_sq(&request.vector, route_table.vector(index));
+                let distance = distance(&request.vector, route_table.vector(index));
                 if distance < best_distance {
                     best_distance = distance;
                     best_agent = route_table.agent_id(index);
@@ -198,7 +207,7 @@ fn run_packed_scan_profile(kernel: &str, config: FixtureConfig) {
                     .packed_vectors()
                     .chunks_exact(route_table.dimensions()),
             ) {
-                let distance = dist_sq(&request.vector, agent_vector);
+                let distance = distance(&request.vector, agent_vector);
                 if distance < best_distance {
                     best_distance = distance;
                     best_agent = agent_id;
