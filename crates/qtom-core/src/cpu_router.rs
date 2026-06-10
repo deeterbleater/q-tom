@@ -1,4 +1,4 @@
-use crate::score::{ScoreCoefficients, score_agent};
+use crate::score::{ScoreCoefficients, ScoreComponents, score_components};
 use crate::types::{
     AgentProfile, AgentRuntimeState, RouteCandidate, RouteDebugInfo, RouteError, RoutingRequest,
     RoutingResult,
@@ -44,15 +44,24 @@ impl CpuRouter {
         let mut available_top_k = BoundedTopK::new(request.k, CandidateSort::Available);
 
         for (agent, state) in self.agents.iter().zip(states.iter().copied()) {
-            let candidate = score_agent(&request.vector, agent, state, self.coefficients)?;
-            observed_top_k.push(candidate.clone());
+            let score = score_components(&request.vector, agent, state, self.coefficients)?;
+            let candidate = CompactCandidate::from_score(agent.id, score);
+            observed_top_k.push(candidate);
             if candidate.available {
                 available_top_k.push(candidate);
             }
         }
 
-        let observed_top_k = observed_top_k.into_vec();
-        let mut available_top_k = available_top_k.into_vec();
+        let observed_top_k = observed_top_k
+            .into_vec()
+            .into_iter()
+            .map(CompactCandidate::into_route_candidate)
+            .collect::<Vec<_>>();
+        let mut available_top_k = available_top_k
+            .into_vec()
+            .into_iter()
+            .map(CompactCandidate::into_route_candidate)
+            .collect::<Vec<_>>();
         let ideal_candidate_unavailable = observed_top_k
             .first()
             .map(|candidate| !candidate.available)
@@ -144,27 +153,15 @@ enum CandidateSort {
     Available,
 }
 
-fn sort_candidates(candidates: &mut [RouteCandidate], sort: CandidateSort) {
-    candidates.sort_by(|left, right| {
-        let left_key = match sort {
-            CandidateSort::Observed => left.base_distance,
-            CandidateSort::Available => left.effective_distance,
-        };
-        let right_key = match sort {
-            CandidateSort::Observed => right.base_distance,
-            CandidateSort::Available => right.effective_distance,
-        };
-
-        left_key
-            .total_cmp(&right_key)
-            .then_with(|| left.agent_id.cmp(&right.agent_id))
-    });
+fn sort_candidates(candidates: &mut [CompactCandidate], sort: CandidateSort) {
+    candidates.sort_by(|left, right| compare_candidate(left, right, sort));
 }
 
 struct BoundedTopK {
     k: usize,
     sort: CandidateSort,
-    candidates: Vec<RouteCandidate>,
+    candidates: Vec<CompactCandidate>,
+    worst_idx: Option<usize>,
 }
 
 impl BoundedTopK {
@@ -173,23 +170,120 @@ impl BoundedTopK {
             k,
             sort,
             candidates: Vec::with_capacity(k),
+            worst_idx: None,
         }
     }
 
-    fn push(&mut self, candidate: RouteCandidate) {
+    fn push(&mut self, candidate: CompactCandidate) {
         if self.k == 0 {
             return;
         }
 
-        self.candidates.push(candidate);
-        sort_candidates(&mut self.candidates, self.sort);
-        if self.candidates.len() > self.k {
-            self.candidates.pop();
+        if self.candidates.len() < self.k {
+            self.candidates.push(candidate);
+            self.update_worst_after_push();
+            return;
+        }
+
+        let Some(worst_idx) = self.worst_idx else {
+            return;
+        };
+
+        if compare_candidate(&candidate, &self.candidates[worst_idx], self.sort).is_lt() {
+            self.candidates[worst_idx] = candidate;
+            self.recompute_worst();
         }
     }
 
-    fn into_vec(self) -> Vec<RouteCandidate> {
+    fn into_vec(mut self) -> Vec<CompactCandidate> {
+        sort_candidates(&mut self.candidates, self.sort);
         self.candidates
+    }
+
+    fn update_worst_after_push(&mut self) {
+        let new_idx = self.candidates.len() - 1;
+        match self.worst_idx {
+            Some(worst_idx)
+                if compare_candidate(
+                    &self.candidates[new_idx],
+                    &self.candidates[worst_idx],
+                    self.sort,
+                )
+                .is_gt() =>
+            {
+                self.worst_idx = Some(new_idx);
+            }
+            None => self.worst_idx = Some(new_idx),
+            _ => {}
+        }
+    }
+
+    fn recompute_worst(&mut self) {
+        self.worst_idx = self
+            .candidates
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| compare_candidate(left, right, self.sort))
+            .map(|(idx, _)| idx);
+    }
+}
+
+fn compare_candidate(
+    left: &CompactCandidate,
+    right: &CompactCandidate,
+    sort: CandidateSort,
+) -> std::cmp::Ordering {
+    let left_key = match sort {
+        CandidateSort::Observed => left.base_distance,
+        CandidateSort::Available => left.effective_distance,
+    };
+    let right_key = match sort {
+        CandidateSort::Observed => right.base_distance,
+        CandidateSort::Available => right.effective_distance,
+    };
+
+    left_key
+        .total_cmp(&right_key)
+        .then_with(|| left.agent_id.cmp(&right.agent_id))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CompactCandidate {
+    agent_id: u32,
+    effective_distance: f32,
+    base_distance: f32,
+    omega: f32,
+    queue_penalty: f32,
+    latency_penalty: f32,
+    cache_penalty: f32,
+    available: bool,
+}
+
+impl CompactCandidate {
+    fn from_score(agent_id: u32, score: ScoreComponents) -> Self {
+        Self {
+            agent_id,
+            effective_distance: score.effective_distance,
+            base_distance: score.base_distance,
+            omega: score.omega,
+            queue_penalty: score.queue_penalty,
+            latency_penalty: score.latency_penalty,
+            cache_penalty: score.cache_penalty,
+            available: score.available,
+        }
+    }
+
+    fn into_route_candidate(self) -> RouteCandidate {
+        RouteCandidate {
+            agent_id: self.agent_id,
+            effective_distance: self.effective_distance,
+            base_distance: self.base_distance,
+            omega: self.omega,
+            queue_penalty: self.queue_penalty,
+            latency_penalty: self.latency_penalty,
+            cache_penalty: self.cache_penalty,
+            available: self.available,
+        }
     }
 }
 
@@ -338,8 +432,8 @@ mod tests {
         base_distance: f32,
         effective_distance: f32,
         available: bool,
-    ) -> RouteCandidate {
-        RouteCandidate {
+    ) -> CompactCandidate {
+        CompactCandidate {
             agent_id,
             effective_distance,
             base_distance,

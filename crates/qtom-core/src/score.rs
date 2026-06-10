@@ -55,6 +55,43 @@ pub fn score_agent(
     })
 }
 
+pub fn score_components(
+    task_vector: &[f32],
+    agent: &AgentProfile,
+    state: AgentRuntimeState,
+    coefficients: ScoreCoefficients,
+) -> Result<ScoreComponents, RouteError> {
+    if task_vector.len() != agent.vector.len() {
+        return Err(RouteError::DimensionMismatch {
+            expected: agent.vector.len(),
+            actual: task_vector.len(),
+            context: "task vector",
+        });
+    }
+
+    let base_distance = dist_sq(task_vector, &agent.vector);
+    let queue_penalty = coefficients.alpha_queue * state.queue_depth_norm;
+    let latency_penalty = coefficients.beta_latency * state.latency_norm;
+    let cache_penalty = coefficients.gamma_cache * state.cache_pressure_norm;
+    let omega = 1.0 + queue_penalty + latency_penalty + cache_penalty;
+    let available = state.is_available();
+    let effective_distance = if available {
+        base_distance * omega
+    } else {
+        f32::INFINITY
+    };
+
+    Ok(ScoreComponents {
+        base_distance,
+        effective_distance,
+        omega,
+        queue_penalty,
+        latency_penalty,
+        cache_penalty,
+        available,
+    })
+}
+
 pub fn dist_sq(lhs: &[f32], rhs: &[f32]) -> f32 {
     lhs.iter()
         .zip(rhs.iter())
@@ -63,6 +100,17 @@ pub fn dist_sq(lhs: &[f32], rhs: &[f32]) -> f32 {
             diff * diff
         })
         .sum()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScoreComponents {
+    pub base_distance: f32,
+    pub effective_distance: f32,
+    pub omega: f32,
+    pub queue_penalty: f32,
+    pub latency_penalty: f32,
+    pub cache_penalty: f32,
+    pub available: bool,
 }
 
 #[cfg(test)]
