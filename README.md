@@ -29,6 +29,7 @@ cp .env.example .env
 cargo test --workspace
 cargo run -p qtom-bench --release
 cargo run -p qtom-bench --release -- --stress
+cargo run -p qtom-bench --release -- --profile
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
@@ -40,6 +41,9 @@ The benchmark runner prints CSV-style rows for the current CPU router across:
 - latency summaries: p50, p95, p99, max per routed task
 
 Use `--stress` to run the opt-in `65536`-agent scenario.
+
+Use `--profile` to compare raw nearest-distance scanning against the full CPU router. This helps isolate whether the current bottleneck is the vector scan itself or router bookkeeping.
+Treat profile output as a coarse signal. Run it multiple times on a quiet machine before drawing hard conclusions.
 
 ## Environment
 
