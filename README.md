@@ -8,7 +8,7 @@ The current implementation is the Phase 0/1 truth source:
 - CPU top-k router
 - observed-vs-available candidate output
 - geometric substitute-quality metrics
-- benchmark smoke runner
+- benchmark smoke runner with latency percentiles
 
 CUDA is intentionally not implemented yet. The CPU route is the correctness oracle for the future RTX 4090 backend.
 
@@ -31,6 +31,12 @@ cargo run -p qtom-bench --release
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
+
+The benchmark runner prints CSV-style rows for the current CPU router across:
+
+- agent counts: `128`, `1024`, `8192`
+- top-k values: `1`, `4`, `8`
+- latency summaries: p50, p95, p99, max per routed task
 
 ## Environment
 
