@@ -49,59 +49,61 @@ impl CpuRouter {
         states: &[AgentRuntimeState],
         route_table: &AgentRouteTable,
     ) -> Result<RoutingResult, RouteError> {
-        let mut observed_top_k = BoundedTopK::new(request.k, CandidateSort::Observed);
         let mut available_top_k = BoundedTopK::new(request.k, CandidateSort::Available);
+        let (debug, ideal_candidate_unavailable) = if self.debug_observed {
+            let mut observed_top_k = BoundedTopK::new(request.k, CandidateSort::Observed);
+            scan_candidates(
+                &request.vector,
+                self.coefficients,
+                route_table,
+                states,
+                |candidate| {
+                    observed_top_k.push(candidate);
+                    if candidate.available {
+                        available_top_k.push(candidate);
+                    }
+                },
+            );
 
-        if route_table.dimensions() == 0 {
-            for (index, state) in states.iter().copied().enumerate() {
-                push_scored_candidate(
-                    &request.vector,
-                    self.coefficients,
-                    route_table.agent_id(index),
-                    route_table.vector(index),
-                    state,
-                    &mut observed_top_k,
-                    &mut available_top_k,
-                );
-            }
+            let observed_candidates = observed_top_k
+                .into_vec()
+                .into_iter()
+                .map(CompactCandidate::into_route_candidate)
+                .collect::<Vec<_>>();
+            let ideal_candidate_unavailable = observed_candidates
+                .first()
+                .map(|candidate| !candidate.available)
+                .unwrap_or(false);
+
+            (
+                Some(RouteDebugInfo {
+                    observed_candidates,
+                }),
+                ideal_candidate_unavailable,
+            )
         } else {
-            for ((agent_id, agent_vector), state) in route_table
-                .agent_ids()
-                .iter()
-                .copied()
-                .zip(
-                    route_table
-                        .packed_vectors()
-                        .chunks_exact(route_table.dimensions()),
-                )
-                .zip(states.iter().copied())
-            {
-                push_scored_candidate(
-                    &request.vector,
-                    self.coefficients,
-                    agent_id,
-                    agent_vector,
-                    state,
-                    &mut observed_top_k,
-                    &mut available_top_k,
-                );
-            }
-        }
+            let mut observed_best = BestObservedCandidate::new(request.k);
+            scan_candidates(
+                &request.vector,
+                self.coefficients,
+                route_table,
+                states,
+                |candidate| {
+                    observed_best.push(candidate);
+                    if candidate.available {
+                        available_top_k.push(candidate);
+                    }
+                },
+            );
 
-        let observed_top_k = observed_top_k
-            .into_vec()
-            .into_iter()
-            .map(CompactCandidate::into_route_candidate)
-            .collect::<Vec<_>>();
+            (None, observed_best.ideal_candidate_unavailable())
+        };
+
         let mut available_top_k = available_top_k
             .into_vec()
             .into_iter()
             .map(CompactCandidate::into_route_candidate)
             .collect::<Vec<_>>();
-        let ideal_candidate_unavailable = observed_top_k
-            .first()
-            .map(|candidate| !candidate.available)
-            .unwrap_or(false);
 
         let used_fallback = available_top_k
             .first()
@@ -126,9 +128,7 @@ impl CpuRouter {
             available_candidates: available_top_k,
             used_fallback,
             ideal_candidate_unavailable,
-            debug: self.debug_observed.then_some(RouteDebugInfo {
-                observed_candidates: observed_top_k,
-            }),
+            debug,
         })
     }
 
@@ -243,20 +243,91 @@ impl RouterBackend for CpuRouter {
 }
 
 #[inline(always)]
-fn push_scored_candidate(
+fn scan_candidates<F>(
+    request_vector: &[f32],
+    coefficients: ScoreCoefficients,
+    route_table: &AgentRouteTable,
+    states: &[AgentRuntimeState],
+    mut push: F,
+) where
+    F: FnMut(CompactCandidate),
+{
+    if route_table.dimensions() == 0 {
+        for (index, state) in states.iter().copied().enumerate() {
+            push(score_compact_candidate(
+                request_vector,
+                coefficients,
+                route_table.agent_id(index),
+                route_table.vector(index),
+                state,
+            ));
+        }
+    } else {
+        for ((agent_id, agent_vector), state) in route_table
+            .agent_ids()
+            .iter()
+            .copied()
+            .zip(
+                route_table
+                    .packed_vectors()
+                    .chunks_exact(route_table.dimensions()),
+            )
+            .zip(states.iter().copied())
+        {
+            push(score_compact_candidate(
+                request_vector,
+                coefficients,
+                agent_id,
+                agent_vector,
+                state,
+            ));
+        }
+    }
+}
+
+#[inline(always)]
+fn score_compact_candidate(
     request_vector: &[f32],
     coefficients: ScoreCoefficients,
     agent_id: u32,
     agent_vector: &[f32],
     state: AgentRuntimeState,
-    observed_top_k: &mut BoundedTopK,
-    available_top_k: &mut BoundedTopK,
-) {
+) -> CompactCandidate {
     let score = score_components_for_vector(request_vector, agent_vector, state, coefficients);
-    let candidate = CompactCandidate::from_score(agent_id, score);
-    observed_top_k.push(candidate);
-    if candidate.available {
-        available_top_k.push(candidate);
+    CompactCandidate::from_score(agent_id, score)
+}
+
+struct BestObservedCandidate {
+    best: Option<CompactCandidate>,
+    track_ideal: bool,
+}
+
+impl BestObservedCandidate {
+    fn new(k: usize) -> Self {
+        Self {
+            best: None,
+            track_ideal: k > 0,
+        }
+    }
+
+    fn push(&mut self, candidate: CompactCandidate) {
+        if self.track_ideal {
+            match self.best {
+                Some(best)
+                    if compare_candidate(&candidate, &best, CandidateSort::Observed).is_lt() =>
+                {
+                    self.best = Some(candidate);
+                }
+                None => self.best = Some(candidate),
+                _ => {}
+            }
+        }
+    }
+
+    fn ideal_candidate_unavailable(self) -> bool {
+        self.best
+            .map(|candidate| !candidate.available)
+            .unwrap_or(false)
     }
 }
 
@@ -484,6 +555,26 @@ mod tests {
 
         assert!(result.used_fallback);
         assert_eq!(result.available_candidates.last().unwrap().agent_id, 42);
+    }
+
+    #[test]
+    fn debug_disabled_skips_observed_candidates_but_keeps_ideal_flag() {
+        let router = CpuRouter::new(
+            vec![agent(1, &[0.0, 0.0]), agent(2, &[0.1, 0.0])],
+            ScoreCoefficients::default(),
+        )
+        .with_debug_observed(false);
+        let states = vec![
+            AgentRuntimeState::unavailable(),
+            AgentRuntimeState::available(),
+        ];
+        let request = request(&[0.0, 0.0], 2, 999, 10.0);
+
+        let result = router.route_one(&request, &states).unwrap();
+
+        assert!(result.ideal_candidate_unavailable);
+        assert!(result.debug.is_none());
+        assert_eq!(result.available_candidates[0].agent_id, 2);
     }
 
     #[test]

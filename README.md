@@ -23,7 +23,8 @@ CUDA is intentionally not implemented yet. The CPU route is the correctness orac
 - Default top-k: `8`
 - Initial agent count: `128`, scaling by factors of `8`
 - Queue pressure starts as `pending_assigned_tasks / agent_capacity_window`
-- Production fast path returns available candidates; debug telemetry preserves observed candidates
+- Production fast path returns available candidates and tracks only the nearest observed candidate needed for `ideal_candidate_unavailable`
+- Debug telemetry preserves full observed top-k candidates
 
 ## Setup
 

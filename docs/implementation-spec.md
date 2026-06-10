@@ -115,7 +115,7 @@ Top-k routing has two views:
 - `available_top_k`: candidates that are currently routable.
 - `observed_top_k`: the raw nearest candidates before availability filtering.
 
-The fast path returns `available_top_k`. Debug and telemetry records include `observed_top_k`. This lets the middleware route only to available agents while still measuring how often the ideal or near-ideal pick was unavailable.
+The fast path returns `available_top_k` and tracks only the nearest observed candidate needed to set `ideal_candidate_unavailable`. Debug and telemetry records include the full `observed_top_k`. This lets the middleware route only to available agents while still measuring how often the ideal or near-ideal pick was unavailable without paying full observed-top-k bookkeeping cost in production mode.
 
 For Prototype 1, top-k can be understood as a circular or hyperspherical neighborhood around the selected point in the capability gradient. The initial radius target is "large enough to usually contain at least 3 agents." The router still returns up to `k = 8` ranked candidates, adjusted by runtime penalties. If the best semantic target is unavailable, substitute quality is measured by how far the selected available candidate moves away from that target region.
 
