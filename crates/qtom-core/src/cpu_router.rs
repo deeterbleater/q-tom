@@ -5,6 +5,8 @@ use crate::types::{
     RoutingResult,
 };
 
+const STACK_TOP_K_CAP: usize = 8;
+
 pub trait RouterBackend {
     fn route_batch(
         &self,
@@ -49,6 +51,10 @@ impl CpuRouter {
         states: &[AgentRuntimeState],
         route_table: &AgentRouteTable,
     ) -> Result<RoutingResult, RouteError> {
+        if request.k == 1 {
+            return self.route_one_best_validated(request, states, route_table);
+        }
+
         let mut available_top_k = BoundedTopK::new(request.k, CandidateSort::Available);
         let (debug, ideal_candidate_unavailable) = if self.debug_observed {
             let mut observed_top_k = BoundedTopK::new(request.k, CandidateSort::Observed);
@@ -82,7 +88,7 @@ impl CpuRouter {
                 ideal_candidate_unavailable,
             )
         } else {
-            let mut observed_best = BestObservedCandidate::new(request.k);
+            let mut observed_best = BestCandidate::new(CandidateSort::Observed, request.k > 0);
             scan_candidates(
                 &request.vector,
                 self.coefficients,
@@ -126,6 +132,71 @@ impl CpuRouter {
         Ok(RoutingResult {
             task_id: request.task_id,
             available_candidates: available_top_k,
+            used_fallback,
+            ideal_candidate_unavailable,
+            debug,
+        })
+    }
+
+    fn route_one_best_validated(
+        &self,
+        request: &RoutingRequest,
+        states: &[AgentRuntimeState],
+        route_table: &AgentRouteTable,
+    ) -> Result<RoutingResult, RouteError> {
+        let mut observed_best = BestCandidate::new(CandidateSort::Observed, true);
+        let mut available_best = BestCandidate::new(CandidateSort::Available, true);
+
+        scan_candidates(
+            &request.vector,
+            self.coefficients,
+            route_table,
+            states,
+            |candidate| {
+                observed_best.push(candidate);
+                if candidate.available {
+                    available_best.push(candidate);
+                }
+            },
+        );
+
+        let observed_best = observed_best.into_candidate();
+        let ideal_candidate_unavailable = observed_best
+            .map(|candidate| !candidate.available)
+            .unwrap_or(false);
+        let debug = self.debug_observed.then(|| RouteDebugInfo {
+            observed_candidates: observed_best
+                .map(CompactCandidate::into_route_candidate)
+                .into_iter()
+                .collect(),
+        });
+        let mut available_candidates = available_best
+            .into_candidate()
+            .map(CompactCandidate::into_route_candidate)
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let used_fallback = available_candidates
+            .first()
+            .map(|candidate| candidate.base_distance > request.radius_max_threshold)
+            .unwrap_or(true);
+
+        if used_fallback {
+            available_candidates.push(RouteCandidate {
+                agent_id: request.fallback_generalist_id,
+                effective_distance: f32::INFINITY,
+                base_distance: f32::INFINITY,
+                omega: 1.0,
+                queue_penalty: 0.0,
+                latency_penalty: 0.0,
+                cache_penalty: 0.0,
+                available: true,
+            });
+        }
+
+        Ok(RoutingResult {
+            task_id: request.task_id,
+            available_candidates,
             used_fallback,
             ideal_candidate_unavailable,
             debug,
@@ -297,25 +368,25 @@ fn score_compact_candidate(
     CompactCandidate::from_score(agent_id, score)
 }
 
-struct BestObservedCandidate {
+struct BestCandidate {
     best: Option<CompactCandidate>,
+    sort: CandidateSort,
     track_ideal: bool,
 }
 
-impl BestObservedCandidate {
-    fn new(k: usize) -> Self {
+impl BestCandidate {
+    fn new(sort: CandidateSort, enabled: bool) -> Self {
         Self {
             best: None,
-            track_ideal: k > 0,
+            sort,
+            track_ideal: enabled,
         }
     }
 
     fn push(&mut self, candidate: CompactCandidate) {
         if self.track_ideal {
             match self.best {
-                Some(best)
-                    if compare_candidate(&candidate, &best, CandidateSort::Observed).is_lt() =>
-                {
+                Some(best) if compare_candidate(&candidate, &best, self.sort).is_lt() => {
                     self.best = Some(candidate);
                 }
                 None => self.best = Some(candidate),
@@ -328,6 +399,10 @@ impl BestObservedCandidate {
         self.best
             .map(|candidate| !candidate.available)
             .unwrap_or(false)
+    }
+
+    fn into_candidate(self) -> Option<CompactCandidate> {
+        self.best
     }
 }
 
@@ -344,7 +419,7 @@ fn sort_candidates(candidates: &mut [CompactCandidate], sort: CandidateSort) {
 struct BoundedTopK {
     k: usize,
     sort: CandidateSort,
-    candidates: Vec<CompactCandidate>,
+    storage: TopKStorage,
     worst_idx: Option<usize>,
 }
 
@@ -353,7 +428,7 @@ impl BoundedTopK {
         Self {
             k,
             sort,
-            candidates: Vec::with_capacity(k),
+            storage: TopKStorage::new(k),
             worst_idx: None,
         }
     }
@@ -363,8 +438,8 @@ impl BoundedTopK {
             return;
         }
 
-        if self.candidates.len() < self.k {
-            self.candidates.push(candidate);
+        if self.len() < self.k {
+            self.push_candidate(candidate);
             self.update_worst_after_push();
             return;
         }
@@ -373,24 +448,25 @@ impl BoundedTopK {
             return;
         };
 
-        if compare_candidate(&candidate, &self.candidates[worst_idx], self.sort).is_lt() {
-            self.candidates[worst_idx] = candidate;
+        if compare_candidate(&candidate, &self.candidate(worst_idx), self.sort).is_lt() {
+            self.replace_candidate(worst_idx, candidate);
             self.recompute_worst();
         }
     }
 
-    fn into_vec(mut self) -> Vec<CompactCandidate> {
-        sort_candidates(&mut self.candidates, self.sort);
-        self.candidates
+    fn into_vec(self) -> Vec<CompactCandidate> {
+        let mut candidates = self.storage.into_vec();
+        sort_candidates(&mut candidates, self.sort);
+        candidates
     }
 
     fn update_worst_after_push(&mut self) {
-        let new_idx = self.candidates.len() - 1;
+        let new_idx = self.len() - 1;
         match self.worst_idx {
             Some(worst_idx)
                 if compare_candidate(
-                    &self.candidates[new_idx],
-                    &self.candidates[worst_idx],
+                    &self.candidate(new_idx),
+                    &self.candidate(worst_idx),
                     self.sort,
                 )
                 .is_gt() =>
@@ -403,12 +479,97 @@ impl BoundedTopK {
     }
 
     fn recompute_worst(&mut self) {
-        self.worst_idx = self
-            .candidates
-            .iter()
-            .enumerate()
-            .max_by(|(_, left), (_, right)| compare_candidate(left, right, self.sort))
-            .map(|(idx, _)| idx);
+        self.worst_idx = (0..self.len()).max_by(|left, right| {
+            compare_candidate(&self.candidate(*left), &self.candidate(*right), self.sort)
+        });
+    }
+
+    fn len(&self) -> usize {
+        self.storage.len()
+    }
+
+    fn candidate(&self, idx: usize) -> CompactCandidate {
+        self.storage.candidate(idx)
+    }
+
+    fn push_candidate(&mut self, candidate: CompactCandidate) {
+        self.storage.push(candidate);
+    }
+
+    fn replace_candidate(&mut self, idx: usize, candidate: CompactCandidate) {
+        self.storage.replace(idx, candidate);
+    }
+}
+
+enum TopKStorage {
+    Stack {
+        candidates: [Option<CompactCandidate>; STACK_TOP_K_CAP],
+        len: usize,
+    },
+    Heap(Vec<CompactCandidate>),
+}
+
+impl TopKStorage {
+    fn new(k: usize) -> Self {
+        if k <= STACK_TOP_K_CAP {
+            Self::Stack {
+                candidates: [None; STACK_TOP_K_CAP],
+                len: 0,
+            }
+        } else {
+            Self::Heap(Vec::with_capacity(k))
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Stack { len, .. } => *len,
+            Self::Heap(candidates) => candidates.len(),
+        }
+    }
+
+    fn candidate(&self, idx: usize) -> CompactCandidate {
+        match self {
+            Self::Stack { candidates, len } => {
+                debug_assert!(idx < *len);
+                candidates[idx].expect("stack top-k slot should be initialized")
+            }
+            Self::Heap(candidates) => candidates[idx],
+        }
+    }
+
+    fn push(&mut self, candidate: CompactCandidate) {
+        match self {
+            Self::Stack { candidates, len } => {
+                debug_assert!(*len < STACK_TOP_K_CAP);
+                candidates[*len] = Some(candidate);
+                *len += 1;
+            }
+            Self::Heap(candidates) => candidates.push(candidate),
+        }
+    }
+
+    fn replace(&mut self, idx: usize, candidate: CompactCandidate) {
+        match self {
+            Self::Stack { candidates, len } => {
+                debug_assert!(idx < *len);
+                candidates[idx] = Some(candidate);
+            }
+            Self::Heap(candidates) => candidates[idx] = candidate,
+        }
+    }
+
+    fn into_vec(self) -> Vec<CompactCandidate> {
+        match self {
+            Self::Stack { candidates, len } => {
+                let mut out = Vec::with_capacity(len);
+                for candidate in candidates.iter().take(len) {
+                    out.push(candidate.expect("stack top-k slot should be initialized"));
+                }
+                out
+            }
+            Self::Heap(candidates) => candidates,
+        }
     }
 }
 
@@ -578,6 +739,41 @@ mod tests {
     }
 
     #[test]
+    fn k_one_route_uses_single_winner_path_with_debug_candidate() {
+        let router = CpuRouter::new(
+            vec![
+                agent(1, &[0.0, 0.0]),
+                agent(2, &[0.1, 0.0]),
+                agent(3, &[0.2, 0.0]),
+            ],
+            ScoreCoefficients::default(),
+        );
+        let states = vec![
+            AgentRuntimeState::unavailable(),
+            AgentRuntimeState::available(),
+            AgentRuntimeState::available(),
+        ];
+        let request = request(&[0.0, 0.0], 1, 999, 10.0);
+
+        let result = router.route_one(&request, &states).unwrap();
+
+        assert!(result.ideal_candidate_unavailable);
+        assert_eq!(result.available_candidates.len(), 1);
+        assert_eq!(result.available_candidates[0].agent_id, 2);
+        assert_eq!(
+            result
+                .debug
+                .as_ref()
+                .unwrap()
+                .observed_candidates
+                .iter()
+                .map(|candidate| candidate.agent_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
     fn bounded_top_k_matches_full_sort_order() {
         let candidates = vec![
             candidate(5, 0.5, 0.9, true),
@@ -594,6 +790,33 @@ mod tests {
         let mut sorted = candidates;
         sort_candidates(&mut sorted, CandidateSort::Observed);
         sorted.truncate(3);
+
+        assert_eq!(
+            bounded
+                .into_vec()
+                .iter()
+                .map(|candidate| candidate.agent_id)
+                .collect::<Vec<_>>(),
+            sorted
+                .iter()
+                .map(|candidate| candidate.agent_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bounded_top_k_heap_fallback_matches_full_sort_order() {
+        let candidates = (0..12)
+            .map(|idx| candidate(idx, (12 - idx) as f32, idx as f32, true))
+            .collect::<Vec<_>>();
+        let mut bounded = BoundedTopK::new(9, CandidateSort::Available);
+        for candidate in candidates.clone() {
+            bounded.push(candidate);
+        }
+
+        let mut sorted = candidates;
+        sort_candidates(&mut sorted, CandidateSort::Available);
+        sorted.truncate(9);
 
         assert_eq!(
             bounded

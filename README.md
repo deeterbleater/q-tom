@@ -8,6 +8,8 @@ The current implementation is the Phase 0/1 truth source:
 - CPU top-k router
 - packed row-major agent route table
 - blocked distance kernel for small fixed-width vectors
+- stack-backed top-k for `k <= 8`
+- specialized single-winner path for `k = 1`
 - order-preserving batch router with configurable worker count
 - observed-vs-available candidate output
 - geometric substitute-quality metrics

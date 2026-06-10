@@ -371,6 +371,8 @@ Requirements:
 
 - Stores agent IDs and vectors in a packed row-major route table.
 - Uses a blocked distance kernel for `d = 16` and `d = 32` style vectors.
+- Uses stack-backed top-k storage for `k <= 8`.
+- Uses a specialized single-winner path for `k = 1`.
 - Implements the exact score function.
 - Handles unavailable agents.
 - Applies fallback threshold.
