@@ -38,6 +38,7 @@ cargo run -p qtom-bench --release -- --stress
 cargo run -p qtom-bench --release -- --profile
 cargo run -p qtom-bench --release -- --layout-profile
 cargo run -p qtom-bench --release -- --batch-profile
+cargo run -p qtom-bench --release -- --prod-profile
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
@@ -55,6 +56,8 @@ Use `--profile` to compare raw nearest-distance scanning against the full CPU ro
 Use `--layout-profile` to compare legacy agent-struct scans, packed row-major scans, and blocked distance-kernel scans.
 
 Use `--batch-profile` to compare order-preserving batch routing across worker counts with observed-candidate debug telemetry enabled and disabled. This helps isolate request-level parallelism from observability/materialization overhead.
+
+Use `--prod-profile` to measure production routing with observed-candidate debug telemetry disabled across worker counts, vector dimensions, and `k=1` / `k=8`.
 
 Treat profile output as a coarse signal. Run it multiple times on a quiet machine before drawing hard conclusions.
 

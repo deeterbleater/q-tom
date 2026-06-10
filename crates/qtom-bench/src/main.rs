@@ -12,6 +12,7 @@ const PROFILE_AGENT_COUNTS: [usize; 4] = [8192, 65536, 131072, 262144];
 const BATCH_PROFILE_AGENT_COUNTS: [usize; 3] = [8192, 65536, 262144];
 const PROFILE_DIMENSIONS: [usize; 2] = [16, 32];
 const TOP_K_VALUES: [usize; 3] = [1, 4, 8];
+const PROD_TOP_K_VALUES: [usize; 2] = [1, 8];
 
 fn main() {
     let mode = BenchMode::from_args(env::args().skip(1));
@@ -30,6 +31,7 @@ fn main() {
         BenchMode::Smoke | BenchMode::Stress => run_route_matrix(mode),
         BenchMode::Profile => run_profile_matrix(),
         BenchMode::BatchProfile => run_batch_profile_matrix(),
+        BenchMode::ProdProfile => run_prod_profile_matrix(),
         BenchMode::LayoutProfile => run_layout_profile_matrix(),
     }
 }
@@ -114,6 +116,30 @@ fn run_batch_profile_matrix() {
             for debug_observed in [true, false] {
                 for workers in batch_worker_counts(config.task_count) {
                     run_batch_route_profile(config, workers, debug_observed);
+                }
+            }
+        }
+    }
+}
+
+fn run_prod_profile_matrix() {
+    println!(
+        "kernel,workers,agents,tasks,dims,k,total_ms,routes_s,candidates_s,gdim_ops_s,ideal_unavailable,checksum"
+    );
+
+    for agent_count in BATCH_PROFILE_AGENT_COUNTS {
+        for dimensions in PROFILE_DIMENSIONS {
+            for k in PROD_TOP_K_VALUES {
+                let config = FixtureConfig {
+                    agent_count,
+                    task_count: profile_task_count_for(agent_count),
+                    dimensions,
+                    k,
+                    seed: scenario_seed(agent_count, dimensions),
+                };
+
+                for workers in batch_worker_counts(config.task_count) {
+                    run_prod_route_profile(config, workers);
                 }
             }
         }
@@ -329,6 +355,30 @@ fn print_profile_report(
     );
 }
 
+fn run_prod_route_profile(config: FixtureConfig, workers: usize) {
+    let fixture = generate_fixture(config);
+    let router =
+        CpuRouter::new(fixture.agents, ScoreCoefficients::default()).with_debug_observed(false);
+    let actual_workers = workers.max(1).min(config.task_count.max(1));
+
+    let start = Instant::now();
+    let results = router
+        .route_batch_with_workers(&fixture.requests, &fixture.states, actual_workers)
+        .expect("fixture should be valid");
+    let total_elapsed = start.elapsed();
+
+    let metrics = batch_metrics(&results);
+    let checksum = checksum_results(&results);
+    print_prod_profile_report(
+        "route-prod",
+        config,
+        actual_workers,
+        total_elapsed,
+        metrics,
+        checksum,
+    );
+}
+
 fn print_batch_profile_report(
     kernel: &str,
     config: FixtureConfig,
@@ -360,6 +410,37 @@ fn print_batch_profile_report(
         metrics.ideal_unavailable_count,
         metrics.mean_substitute_distance_delta,
         metrics.mean_top_k_radius,
+        checksum
+    );
+}
+
+fn print_prod_profile_report(
+    kernel: &str,
+    config: FixtureConfig,
+    workers: usize,
+    total_elapsed: Duration,
+    metrics: BatchMetrics,
+    checksum: f64,
+) {
+    let elapsed_secs = total_elapsed.as_secs_f64();
+    let routes_per_second = metrics.routes as f64 / elapsed_secs.max(f64::EPSILON);
+    let candidates_per_second =
+        (config.task_count * config.agent_count) as f64 / elapsed_secs.max(f64::EPSILON);
+    let gdim_ops_per_second = candidates_per_second * config.dimensions as f64 / 1_000_000_000.0;
+
+    println!(
+        "{},{},{},{},{},{},{:.3},{:.1},{:.1},{:.3},{},{:.6}",
+        kernel,
+        workers,
+        config.agent_count,
+        config.task_count,
+        config.dimensions,
+        config.k,
+        elapsed_secs * 1000.0,
+        routes_per_second,
+        candidates_per_second,
+        gdim_ops_per_second,
+        metrics.ideal_unavailable_count,
         checksum
     );
 }
@@ -462,6 +543,7 @@ enum BenchMode {
     Stress,
     Profile,
     BatchProfile,
+    ProdProfile,
     LayoutProfile,
 }
 
@@ -473,6 +555,7 @@ impl BenchMode {
                 "--stress" => mode = Self::Stress,
                 "--profile" => mode = Self::Profile,
                 "--batch-profile" => mode = Self::BatchProfile,
+                "--prod-profile" => mode = Self::ProdProfile,
                 "--layout-profile" => mode = Self::LayoutProfile,
                 _ => {}
             }
@@ -486,6 +569,7 @@ impl BenchMode {
             Self::Stress => &STRESS_AGENT_COUNTS,
             Self::Profile => &PROFILE_AGENT_COUNTS,
             Self::BatchProfile => &BATCH_PROFILE_AGENT_COUNTS,
+            Self::ProdProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::LayoutProfile => &PROFILE_AGENT_COUNTS,
         }
     }
@@ -496,6 +580,7 @@ impl BenchMode {
             Self::Stress => "stress",
             Self::Profile => "profile",
             Self::BatchProfile => "batch-profile",
+            Self::ProdProfile => "prod-profile",
             Self::LayoutProfile => "layout-profile",
         }
     }
@@ -536,6 +621,14 @@ mod tests {
         assert_eq!(
             BenchMode::from_args(["--batch-profile".to_string()]),
             BenchMode::BatchProfile
+        );
+    }
+
+    #[test]
+    fn prod_profile_flag_selects_prod_profile_mode() {
+        assert_eq!(
+            BenchMode::from_args(["--prod-profile".to_string()]),
+            BenchMode::ProdProfile
         );
     }
 

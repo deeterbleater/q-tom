@@ -518,6 +518,7 @@ Compare:
 - Optimized CPU loop with Rayon or SIMD where practical.
 - CUDA simple kernel.
 - CUDA optimized kernels from Phase 3.
+- Production batch route profile with observed-candidate debug telemetry disabled.
 
 ### Workload Matrix
 
@@ -531,6 +532,8 @@ Compare:
 | Neighborhood radius | adaptive radius for at least 3 observed candidates |
 | Queue pressure | none, mild, severe |
 | Latency pressure | none, one cluster degraded, random degraded |
+
+The production profile must include at least `k=1` and `k=8` so the hot single-winner path can be tracked separately from normal top-k routing.
 
 ### Metrics
 
