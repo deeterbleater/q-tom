@@ -1,9 +1,11 @@
 use qtom_core::{
     AgentRouteTable, BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, ScoreCoefficients,
-    batch_metrics, generate_fixture,
+    batch_metrics, generate_fixture, read_golden_fixture,
     score::{dist_sq, dist_sq_blocked},
+    write_golden_fixture,
 };
 use std::env;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 const AGENT_COUNTS: [usize; 3] = [128, 1024, 8192];
@@ -27,16 +29,22 @@ fn main() {
         project_config.default_agent_count
     );
 
-    match mode {
-        BenchMode::Smoke | BenchMode::Stress => run_route_matrix(mode),
+    match &mode {
+        BenchMode::Invalid(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+        BenchMode::Smoke | BenchMode::Stress => run_route_matrix(&mode),
         BenchMode::Profile => run_profile_matrix(),
         BenchMode::BatchProfile => run_batch_profile_matrix(),
         BenchMode::ProdProfile => run_prod_profile_matrix(),
         BenchMode::LayoutProfile => run_layout_profile_matrix(),
+        BenchMode::WriteGolden { path } => run_write_golden(path),
+        BenchMode::GoldenParity { path } => run_golden_parity(path),
     }
 }
 
-fn run_route_matrix(mode: BenchMode) {
+fn run_route_matrix(mode: &BenchMode) {
     println!(
         "agents,tasks,dims,k,total_ms,routes_s,p50_us,p95_us,p99_us,max_us,ideal_unavailable,mean_delta,mean_radius"
     );
@@ -52,6 +60,78 @@ fn run_route_matrix(mode: BenchMode) {
             });
         }
     }
+}
+
+fn run_write_golden(path: &Path) {
+    let config = golden_fixture_config();
+    let fixture = generate_fixture(config);
+    write_golden_fixture(path, config, &fixture).expect("golden fixture should be writable");
+    let loaded = read_golden_fixture(path).expect("written golden fixture should be readable");
+
+    assert_eq!(loaded.config, config);
+    assert_eq!(loaded.fixture, fixture);
+
+    println!(
+        "golden_fixture_written,path={},agents={},tasks={},dims={},k={},seed={:016x}",
+        path.display(),
+        config.agent_count,
+        config.task_count,
+        config.dimensions,
+        config.k,
+        config.seed
+    );
+}
+
+fn run_golden_parity(path: &Path) {
+    let golden = read_golden_fixture(path).expect("golden fixture should be readable");
+    let config = golden.config;
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .max(1)
+        .min(config.task_count.max(1));
+
+    let sequential_router =
+        CpuRouter::new(golden.fixture.agents.clone(), ScoreCoefficients::default())
+            .with_debug_observed(false);
+    let parallel_router = CpuRouter::new(golden.fixture.agents, ScoreCoefficients::default())
+        .with_debug_observed(false);
+
+    let sequential = sequential_router
+        .route_batch_with_workers(&golden.fixture.requests, &golden.fixture.states, 1)
+        .expect("sequential CPU route should be valid");
+    let parallel = parallel_router
+        .route_batch_with_workers(&golden.fixture.requests, &golden.fixture.states, workers)
+        .expect("parallel CPU route should be valid");
+
+    if sequential != parallel {
+        let mismatch = sequential
+            .iter()
+            .zip(parallel.iter())
+            .position(|(left, right)| left != right)
+            .unwrap_or(sequential.len().min(parallel.len()));
+        eprintln!(
+            "golden parity failed: first_mismatch={} sequential_len={} parallel_len={}",
+            mismatch,
+            sequential.len(),
+            parallel.len()
+        );
+        std::process::exit(1);
+    }
+
+    let metrics = batch_metrics(&parallel);
+    println!(
+        "golden_parity_ok,path={},agents={},tasks={},dims={},k={},workers={},routes={},ideal_unavailable={},checksum={:.6}",
+        path.display(),
+        config.agent_count,
+        config.task_count,
+        config.dimensions,
+        config.k,
+        workers,
+        metrics.routes,
+        metrics.ideal_unavailable_count,
+        checksum_results(&parallel)
+    );
 }
 
 fn run_profile_matrix() {
@@ -481,6 +561,16 @@ fn scenario_seed(agent_count: usize, k: usize) -> u64 {
     0x5154_4f4d ^ ((agent_count as u64) << 8) ^ k as u64
 }
 
+fn golden_fixture_config() -> FixtureConfig {
+    FixtureConfig {
+        agent_count: 8192,
+        task_count: 2048,
+        dimensions: 16,
+        k: 8,
+        seed: scenario_seed(8192, 8),
+    }
+}
+
 fn checksum_results(results: &[qtom_core::RoutingResult]) -> f64 {
     results
         .iter()
@@ -537,7 +627,7 @@ fn percentile(sorted: &[f64], percentile: f64) -> f64 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum BenchMode {
     Smoke,
     Stress,
@@ -545,25 +635,41 @@ enum BenchMode {
     BatchProfile,
     ProdProfile,
     LayoutProfile,
+    WriteGolden { path: std::path::PathBuf },
+    GoldenParity { path: std::path::PathBuf },
+    Invalid(String),
 }
 
 impl BenchMode {
     fn from_args(args: impl IntoIterator<Item = String>) -> Self {
         let mut mode = Self::Smoke;
-        for arg in args {
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--stress" => mode = Self::Stress,
                 "--profile" => mode = Self::Profile,
                 "--batch-profile" => mode = Self::BatchProfile,
                 "--prod-profile" => mode = Self::ProdProfile,
                 "--layout-profile" => mode = Self::LayoutProfile,
+                "--write-golden" => {
+                    let Some(path) = args.next() else {
+                        return Self::Invalid("--write-golden requires a path".to_string());
+                    };
+                    mode = Self::WriteGolden { path: path.into() };
+                }
+                "--golden-parity" => {
+                    let Some(path) = args.next() else {
+                        return Self::Invalid("--golden-parity requires a path".to_string());
+                    };
+                    mode = Self::GoldenParity { path: path.into() };
+                }
                 _ => {}
             }
         }
         mode
     }
 
-    fn agent_counts(self) -> &'static [usize] {
+    fn agent_counts(&self) -> &'static [usize] {
         match self {
             Self::Smoke => &AGENT_COUNTS,
             Self::Stress => &STRESS_AGENT_COUNTS,
@@ -571,10 +677,11 @@ impl BenchMode {
             Self::BatchProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::ProdProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::LayoutProfile => &PROFILE_AGENT_COUNTS,
+            Self::WriteGolden { .. } | Self::GoldenParity { .. } | Self::Invalid(_) => &[],
         }
     }
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Self::Smoke => "smoke",
             Self::Stress => "stress",
@@ -582,6 +689,9 @@ impl BenchMode {
             Self::BatchProfile => "batch-profile",
             Self::ProdProfile => "prod-profile",
             Self::LayoutProfile => "layout-profile",
+            Self::WriteGolden { .. } => "write-golden",
+            Self::GoldenParity { .. } => "golden-parity",
+            Self::Invalid(_) => "invalid",
         }
     }
 }
@@ -637,6 +747,44 @@ mod tests {
         assert_eq!(
             BenchMode::from_args(["--layout-profile".to_string()]),
             BenchMode::LayoutProfile
+        );
+    }
+
+    #[test]
+    fn write_golden_flag_selects_path_mode() {
+        assert_eq!(
+            BenchMode::from_args([
+                "--write-golden".to_string(),
+                "work/golden/default.fixture".to_string()
+            ]),
+            BenchMode::WriteGolden {
+                path: "work/golden/default.fixture".into()
+            }
+        );
+    }
+
+    #[test]
+    fn golden_parity_flag_selects_path_mode() {
+        assert_eq!(
+            BenchMode::from_args([
+                "--golden-parity".to_string(),
+                "work/golden/default.fixture".to_string()
+            ]),
+            BenchMode::GoldenParity {
+                path: "work/golden/default.fixture".into()
+            }
+        );
+    }
+
+    #[test]
+    fn golden_flags_require_paths() {
+        assert_eq!(
+            BenchMode::from_args(["--write-golden".to_string()]),
+            BenchMode::Invalid("--write-golden requires a path".to_string())
+        );
+        assert_eq!(
+            BenchMode::from_args(["--golden-parity".to_string()]),
+            BenchMode::Invalid("--golden-parity requires a path".to_string())
         );
     }
 

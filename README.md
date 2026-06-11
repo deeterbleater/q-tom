@@ -39,6 +39,8 @@ cargo run -p qtom-bench --release -- --profile
 cargo run -p qtom-bench --release -- --layout-profile
 cargo run -p qtom-bench --release -- --batch-profile
 cargo run -p qtom-bench --release -- --prod-profile
+cargo run -p qtom-bench --release -- --write-golden work/golden/8192x2048d16k8.fixture
+cargo run -p qtom-bench --release -- --golden-parity work/golden/8192x2048d16k8.fixture
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
@@ -58,6 +60,8 @@ Use `--layout-profile` to compare legacy agent-struct scans, packed row-major sc
 Use `--batch-profile` to compare order-preserving batch routing across worker counts with observed-candidate debug telemetry enabled and disabled. This helps isolate request-level parallelism from observability/materialization overhead.
 
 Use `--prod-profile` to measure production routing with observed-candidate debug telemetry disabled across worker counts, vector dimensions, and `k=1` / `k=8`.
+
+Use `--write-golden` to export the default `8192 agents / 2048 tasks / 16 dims / k=8` deterministic fixture with exact `f32` bit-pattern encoding. Use `--golden-parity` to read that fixture back and compare sequential CPU routing against parallel CPU routing. This is the first parity artifact for the future CUDA backend.
 
 Treat profile output as a coarse signal. Run it multiple times on a quiet machine before drawing hard conclusions.
 

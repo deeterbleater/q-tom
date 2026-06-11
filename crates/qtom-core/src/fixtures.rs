@@ -1,6 +1,6 @@
 use crate::types::{AgentLabels, AgentProfile, AgentRuntimeState, DEFAULT_DIM, RoutingRequest};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixtureConfig {
     pub agent_count: usize,
     pub task_count: usize,
@@ -21,7 +21,7 @@ impl Default for FixtureConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Fixture {
     pub agents: Vec<AgentProfile>,
     pub states: Vec<AgentRuntimeState>,

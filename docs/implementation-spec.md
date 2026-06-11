@@ -401,10 +401,12 @@ Requirements:
 - Simulate unavailable agents.
 - Simulate rising queue depth and latency.
 - Export deterministic fixtures from a fixed random seed.
+- Export golden fixture files with exact `f32` bit-pattern encoding for cross-machine CPU/GPU parity tests.
 
 Success criteria:
 
 - Repeated runs generate identical fixtures.
+- Golden fixtures round-trip exactly through the reader and writer.
 - The nearest-agent route is known for basic cases.
 - Substitute-agent behavior can be evaluated when the ideal agent is unavailable.
 - Top-k ordering is deterministic for non-tie cases.
@@ -435,6 +437,7 @@ Success criteria:
 - Unit tests cover score calculation, availability, fallback, top-k ordering, and substitute selection.
 - CPU benchmark reports p50, p95, p99, max latency, and routes/sec.
 - CPU benchmark reports how often the observed best candidate is unavailable.
+- CPU self-parity compares sequential and parallel routing over a golden fixture.
 
 ### Phase 2: CUDA Kernel on RTX 4090
 
@@ -451,7 +454,7 @@ This is not the final fastest design. It is the simplest correctness-first GPU i
 
 Success criteria:
 
-- GPU results match CPU results for the same fixtures.
+- GPU results match CPU results for the same golden fixtures.
 - Mismatch rate is zero for deterministic fixtures, except for documented floating-point tie cases.
 - Benchmarks cover batch sizes `1, 8, 32, 128, 512, 2048`.
 - Benchmarks cover agent counts `128`, `1024`, `8192`, with `65536` reserved for later stress testing.
