@@ -1,9 +1,11 @@
 [package]
-name = "qtom-bench"
+name = "qtom-cuda"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 qtom-core = { path = "../qtom-core" }
-qtom-cuda = { path = "../qtom-cuda" }

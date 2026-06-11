@@ -85,6 +85,10 @@ pub struct RouteCandidate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RouteError {
     EmptyAgents,
+    BackendUnavailable {
+        backend: &'static str,
+        reason: &'static str,
+    },
     DimensionMismatch {
         expected: usize,
         actual: usize,
@@ -100,6 +104,9 @@ impl std::fmt::Display for RouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RouteError::EmptyAgents => write!(f, "router has no agents"),
+            RouteError::BackendUnavailable { backend, reason } => {
+                write!(f, "{backend} backend unavailable: {reason}")
+            }
             RouteError::DimensionMismatch {
                 expected,
                 actual,

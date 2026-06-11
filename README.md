@@ -12,6 +12,7 @@ The current implementation is the Phase 0/1 truth source:
 - specialized single-winner path for `k = 1`
 - order-preserving batch router with configurable worker count
 - explicit backend trait with exact parity harness
+- CUDA backend scaffold and buffer-layout planner
 - observed-vs-available candidate output
 - geometric substitute-quality metrics
 - benchmark runners for latency, scan overhead, memory layout, and batch throughput
@@ -42,6 +43,7 @@ cargo run -p qtom-bench --release -- --batch-profile
 cargo run -p qtom-bench --release -- --prod-profile
 cargo run -p qtom-bench --release -- --write-golden work/golden/8192x2048d16k8.fixture
 cargo run -p qtom-bench --release -- --golden-parity work/golden/8192x2048d16k8.fixture
+cargo run -p qtom-bench --release -- --cuda-plan work/golden/8192x2048d16k8.fixture
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
@@ -63,6 +65,8 @@ Use `--batch-profile` to compare order-preserving batch routing across worker co
 Use `--prod-profile` to measure production routing with observed-candidate debug telemetry disabled across worker counts, vector dimensions, and `k=1` / `k=8`.
 
 Use `--write-golden` to export the default `8192 agents / 2048 tasks / 16 dims / k=8` deterministic fixture with exact `f32` bit-pattern encoding. Use `--golden-parity` to read that fixture back and compare sequential CPU routing against parallel CPU routing. This is the first parity artifact for the future CUDA backend.
+
+Use `--cuda-plan` to read a golden fixture through the CUDA scaffold and print the planned flat device-buffer sizes. The scaffold compiles on non-CUDA hosts but reports the CUDA backend as unavailable until host runtime and kernels are implemented.
 
 Treat profile output as a coarse signal. Run it multiple times on a quiet machine before drawing hard conclusions.
 
@@ -86,6 +90,7 @@ The code only reports whether `OPENAI_API_KEY` is present. It does not print the
 crates/
   qtom-core/   # core types, CPU router, fixtures, metrics
   qtom-bench/  # CPU benchmark smoke runner
+  qtom-cuda/   # CUDA backend scaffold and buffer layout
 docs/          # design/spec documents
 ```
 

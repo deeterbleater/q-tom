@@ -5,6 +5,7 @@ use qtom_core::{
     score::{dist_sq, dist_sq_blocked},
     write_golden_fixture,
 };
+use qtom_cuda::CudaRouter;
 use std::env;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -42,6 +43,7 @@ fn main() {
         BenchMode::LayoutProfile => run_layout_profile_matrix(),
         BenchMode::WriteGolden { path } => run_write_golden(path),
         BenchMode::GoldenParity { path } => run_golden_parity(path),
+        BenchMode::CudaPlan { path } => run_cuda_plan(path),
     }
 }
 
@@ -113,6 +115,33 @@ fn run_golden_parity(path: &Path) {
         report.routes,
         report.ideal_unavailable_count,
         report.checksum
+    );
+}
+
+fn run_cuda_plan(path: &Path) {
+    let golden = read_golden_fixture(path).expect("golden fixture should be readable");
+    let config = golden.config;
+    let router = CudaRouter::new(golden.fixture.agents, ScoreCoefficients::default());
+    let status = router.status();
+    let plan = router
+        .buffer_plan(config.task_count, config.k)
+        .expect("golden fixture should produce a CUDA buffer plan");
+
+    println!(
+        "cuda_plan,path={},backend={},available={},reason=\"{}\",agents={},tasks={},dims={},k={},agent_vector_f32={},request_vector_f32={},output_slots={},total_f32={},total_u32={}",
+        path.display(),
+        router.name(),
+        status.available,
+        status.reason,
+        plan.agent_count,
+        plan.request_count,
+        plan.dimensions,
+        plan.k,
+        plan.agent_vector_f32_len,
+        plan.request_vector_f32_len,
+        plan.output_candidate_u32_len,
+        plan.total_f32_len(),
+        plan.total_u32_len()
     );
 }
 
@@ -646,6 +675,7 @@ enum BenchMode {
     LayoutProfile,
     WriteGolden { path: std::path::PathBuf },
     GoldenParity { path: std::path::PathBuf },
+    CudaPlan { path: std::path::PathBuf },
     Invalid(String),
 }
 
@@ -672,6 +702,12 @@ impl BenchMode {
                     };
                     mode = Self::GoldenParity { path: path.into() };
                 }
+                "--cuda-plan" => {
+                    let Some(path) = args.next() else {
+                        return Self::Invalid("--cuda-plan requires a path".to_string());
+                    };
+                    mode = Self::CudaPlan { path: path.into() };
+                }
                 _ => {}
             }
         }
@@ -686,7 +722,10 @@ impl BenchMode {
             Self::BatchProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::ProdProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::LayoutProfile => &PROFILE_AGENT_COUNTS,
-            Self::WriteGolden { .. } | Self::GoldenParity { .. } | Self::Invalid(_) => &[],
+            Self::WriteGolden { .. }
+            | Self::GoldenParity { .. }
+            | Self::CudaPlan { .. }
+            | Self::Invalid(_) => &[],
         }
     }
 
@@ -700,6 +739,7 @@ impl BenchMode {
             Self::LayoutProfile => "layout-profile",
             Self::WriteGolden { .. } => "write-golden",
             Self::GoldenParity { .. } => "golden-parity",
+            Self::CudaPlan { .. } => "cuda-plan",
             Self::Invalid(_) => "invalid",
         }
     }
@@ -794,6 +834,23 @@ mod tests {
         assert_eq!(
             BenchMode::from_args(["--golden-parity".to_string()]),
             BenchMode::Invalid("--golden-parity requires a path".to_string())
+        );
+    }
+
+    #[test]
+    fn cuda_plan_flag_selects_path_mode() {
+        assert_eq!(
+            BenchMode::from_args([
+                "--cuda-plan".to_string(),
+                "work/golden/default.fixture".to_string()
+            ]),
+            BenchMode::CudaPlan {
+                path: "work/golden/default.fixture".into()
+            }
+        );
+        assert_eq!(
+            BenchMode::from_args(["--cuda-plan".to_string()]),
+            BenchMode::Invalid("--cuda-plan requires a path".to_string())
         );
     }
 

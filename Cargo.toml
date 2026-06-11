@@ -2,6 +2,7 @@
 members = [
     "crates/qtom-core",
     "crates/qtom-bench",
+    "crates/qtom-cuda",
 ]
 resolver = "3"
 

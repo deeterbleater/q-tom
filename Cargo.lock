@@ -7,8 +7,16 @@ name = "qtom-bench"
 version = "0.1.0"
 dependencies = [
  "qtom-core",
+ "qtom-cuda",
 ]
 
 [[package]]
 name = "qtom-core"
 version = "0.1.0"
+
+[[package]]
+name = "qtom-cuda"
+version = "0.1.0"
+dependencies = [
+ "qtom-core",
+]

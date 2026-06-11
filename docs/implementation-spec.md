@@ -443,6 +443,13 @@ Success criteria:
 
 Build the first GPU router.
 
+Initial scaffold:
+
+- `qtom-cuda` compiles on non-CUDA hosts.
+- `CudaRouter` implements `RouterBackend` and returns `BackendUnavailable` until host runtime and kernels are implemented.
+- The CUDA crate exposes the flat device-buffer plan for agents, requests, runtime state, candidate outputs, score outputs, and route flags.
+- The benchmark CLI can read a golden fixture and print the CUDA buffer plan without requiring CUDA.
+
 Kernel shape:
 
 - One CUDA thread routes one task against all agents.
@@ -546,7 +553,7 @@ pub trait RouterBackend {
 Backends:
 
 - `CpuRouter`: always available. It provides the correctness oracle, a single-request path, and an order-preserving batch path. The current implementation can route a batch with an explicit worker count for request-level CPU parallelism experiments.
-- `CudaRouter`: used on the RTX 4090 machine.
+- `CudaRouter`: used on the RTX 4090 machine. It starts as a portable scaffold that reports unavailable until the CUDA runtime and kernels are added.
 - `SimRouter`: deterministic test harness.
 
 The middleware should depend on this trait, not on CUDA directly.
