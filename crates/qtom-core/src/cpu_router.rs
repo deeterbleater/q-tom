@@ -1,3 +1,4 @@
+use crate::backend::RouterBackend;
 use crate::route_table::AgentRouteTable;
 use crate::score::{
     ScoreCoefficients, ScoreComponents, dist_sq_blocked, score_components_for_vector,
@@ -11,14 +12,6 @@ const STACK_TOP_K_CAP: usize = 8;
 const PRODUCTION_BLOCKED_MIN_AGENTS: usize = 32_768;
 const PRODUCTION_REQUEST_BLOCK: usize = 8;
 const PRODUCTION_AGENT_BLOCK: usize = 256;
-
-pub trait RouterBackend {
-    fn route_batch(
-        &self,
-        requests: &[RoutingRequest],
-        states: &[AgentRuntimeState],
-    ) -> Result<Vec<RoutingResult>, RouteError>;
-}
 
 #[derive(Clone, Debug)]
 pub struct CpuRouter {
@@ -357,6 +350,10 @@ impl CpuRouter {
 }
 
 impl RouterBackend for CpuRouter {
+    fn name(&self) -> &str {
+        "cpu"
+    }
+
     fn route_batch(
         &self,
         requests: &[RoutingRequest],

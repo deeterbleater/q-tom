@@ -1,6 +1,7 @@
 use qtom_core::{
-    AgentRouteTable, BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, ScoreCoefficients,
-    batch_metrics, generate_fixture, read_golden_fixture,
+    AgentRouteTable, BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig, RouterBackend,
+    ScoreCoefficients, assert_backend_parity, batch_metrics, generate_fixture, read_golden_fixture,
+    routing_results_checksum,
     score::{dist_sq, dist_sq_blocked},
     write_golden_fixture,
 };
@@ -91,47 +92,59 @@ fn run_golden_parity(path: &Path) {
         .max(1)
         .min(config.task_count.max(1));
 
-    let sequential_router =
-        CpuRouter::new(golden.fixture.agents.clone(), ScoreCoefficients::default())
-            .with_debug_observed(false);
-    let parallel_router = CpuRouter::new(golden.fixture.agents, ScoreCoefficients::default())
-        .with_debug_observed(false);
+    let requests = golden.fixture.requests;
+    let states = golden.fixture.states;
+    let agents = golden.fixture.agents;
+    let reference = CpuWorkerBackend::new("cpu-sequential", agents.clone(), 1);
+    let candidate = CpuWorkerBackend::new("cpu-parallel", agents, workers);
+    let report = assert_backend_parity(&reference, &candidate, &requests, &states)
+        .expect("CPU backends should match over golden fixture");
 
-    let sequential = sequential_router
-        .route_batch_with_workers(&golden.fixture.requests, &golden.fixture.states, 1)
-        .expect("sequential CPU route should be valid");
-    let parallel = parallel_router
-        .route_batch_with_workers(&golden.fixture.requests, &golden.fixture.states, workers)
-        .expect("parallel CPU route should be valid");
-
-    if sequential != parallel {
-        let mismatch = sequential
-            .iter()
-            .zip(parallel.iter())
-            .position(|(left, right)| left != right)
-            .unwrap_or(sequential.len().min(parallel.len()));
-        eprintln!(
-            "golden parity failed: first_mismatch={} sequential_len={} parallel_len={}",
-            mismatch,
-            sequential.len(),
-            parallel.len()
-        );
-        std::process::exit(1);
-    }
-
-    let metrics = batch_metrics(&parallel);
     println!(
-        "golden_parity_ok,path={},agents={},tasks={},dims={},k={},workers={},routes={},ideal_unavailable={},checksum={:.6}",
+        "golden_parity_ok,path={},reference={},candidate={},agents={},tasks={},dims={},k={},workers={},routes={},ideal_unavailable={},checksum={:.6}",
         path.display(),
+        report.reference_backend,
+        report.candidate_backend,
         config.agent_count,
         config.task_count,
         config.dimensions,
         config.k,
         workers,
-        metrics.routes,
-        metrics.ideal_unavailable_count,
-        checksum_results(&parallel)
+        report.routes,
+        report.ideal_unavailable_count,
+        report.checksum
     );
+}
+
+struct CpuWorkerBackend {
+    name: &'static str,
+    router: CpuRouter,
+    workers: usize,
+}
+
+impl CpuWorkerBackend {
+    fn new(name: &'static str, agents: Vec<qtom_core::AgentProfile>, workers: usize) -> Self {
+        Self {
+            name,
+            router: CpuRouter::new(agents, ScoreCoefficients::default()).with_debug_observed(false),
+            workers,
+        }
+    }
+}
+
+impl RouterBackend for CpuWorkerBackend {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn route_batch(
+        &self,
+        requests: &[qtom_core::RoutingRequest],
+        states: &[qtom_core::AgentRuntimeState],
+    ) -> Result<Vec<qtom_core::RoutingResult>, qtom_core::RouteError> {
+        self.router
+            .route_batch_with_workers(requests, states, self.workers)
+    }
 }
 
 fn run_profile_matrix() {
@@ -572,11 +585,7 @@ fn golden_fixture_config() -> FixtureConfig {
 }
 
 fn checksum_results(results: &[qtom_core::RoutingResult]) -> f64 {
-    results
-        .iter()
-        .filter_map(|result| result.available_candidates.first())
-        .map(|candidate| candidate.base_distance as f64 + candidate.agent_id as f64)
-        .sum()
+    routing_results_checksum(results)
 }
 
 #[derive(Clone, Copy, Debug, Default)]

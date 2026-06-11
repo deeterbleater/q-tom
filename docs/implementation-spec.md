@@ -533,6 +533,8 @@ Prototype API:
 
 ```rust
 pub trait RouterBackend {
+    fn name(&self) -> &str;
+
     fn route_batch(
         &self,
         requests: &[RoutingRequest],
@@ -548,6 +550,8 @@ Backends:
 - `SimRouter`: deterministic test harness.
 
 The middleware should depend on this trait, not on CUDA directly.
+
+Backend implementations must be testable through the shared exact parity harness. The initial harness compares two `RouterBackend` implementations over the same golden fixture and reports the first mismatch, route count, ideal-unavailable count, and checksum. Future GPU tolerance rules may be added only for documented floating-point tie cases.
 
 ## 9. Hardware-Specific Plan
 

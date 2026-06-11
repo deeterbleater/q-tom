@@ -11,6 +11,7 @@ The current implementation is the Phase 0/1 truth source:
 - stack-backed top-k for `k <= 8`
 - specialized single-winner path for `k = 1`
 - order-preserving batch router with configurable worker count
+- explicit backend trait with exact parity harness
 - observed-vs-available candidate output
 - geometric substitute-quality metrics
 - benchmark runners for latency, scan overhead, memory layout, and batch throughput
