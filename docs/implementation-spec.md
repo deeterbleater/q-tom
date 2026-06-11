@@ -130,6 +130,51 @@ This preserves the original "throw a dart at a capability map" idea while making
 - Returning top-k candidates lets the middleware try the nearest good substitutes without rerunning the full route calculation.
 - Keeping both available and observed top-k lists makes routing behavior debuggable when the best semantic match cannot be used.
 
+### 4.4 Future: Lossy Deterministic Candidate Generation
+
+Lossy determinism is not a replacement for top-k routing. It is a future candidate-generation layer that can sit in front of exact top-k scoring when the agent registry becomes too large for full scans.
+
+The rule is:
+
+- Preserve hard constraints exactly.
+- Project soft relevance state deterministically and lossily.
+- Run exact scoring and top-k selection only inside the selected candidate region.
+
+Hard constraints include availability, permissions, required tool access, memory access, model class, and budget ceilings. These must remain exact masks. Soft relevance state includes task-vector location, queue pressure, latency pressure, cache pressure, and local neighborhood density. These may be quantized into deterministic cells or bands.
+
+Candidate generation can then follow this shape:
+
+```text
+task vector
+  -> deterministic quantized cell
+  -> neighboring cells expanded in fixed order
+  -> stop when enough candidates, radius, or scan budget is reached
+  -> exact score function over candidate set
+  -> exact available top-k output
+```
+
+This changes the performance target from scanning every agent to scanning a bounded candidate subset:
+
+```text
+full scan:      O(agent_count)
+lossy prefilter: O(candidate_count), where candidate_count << agent_count
+```
+
+The expected tradeoff is scale-dependent. At `8192` agents, the current full CPU scan is likely faster than maintaining and querying a projection layer. At `65536+` agents, and especially for cluster-sized swarms, deterministic lossy candidate generation may become the main path to lower p99 latency.
+
+The design must remain replayable. Tie handling, cell expansion order, hysteresis bands, and fallback behavior should be deterministic for the same fixture and live-state snapshot. The intended fuzziness is geometric and state-quantized, not random.
+
+Validation requirements:
+
+- Hard-constraint violation rate is always zero.
+- Candidate recall is measured against the exact full-scan CPU router.
+- Top-k overlap with the exact router is reported.
+- Substitute distance delta is reported.
+- Scanned-candidate reduction is reported.
+- p50, p95, p99, and max latency are compared with the exact router.
+- Route churn, repeat loops, and deadlocks are measured under orchestration stress tests.
+- If recall or substitute quality falls below threshold, the router expands more cells or falls back to the exact scan.
+
 ## 5. Data Model
 
 ### 5.1 Agent Registry
@@ -456,6 +501,27 @@ Metrics:
 - CPU utilization.
 - GPU utilization.
 
+### Phase 4.5: Lossy Candidate Generation
+
+Add deterministic projection for large agent registries only after the exact CPU and CUDA routes are established.
+
+Requirements:
+
+- Quantize task vectors into deterministic routing cells.
+- Preserve hard constraints as exact masks.
+- Expand neighboring cells in a fixed, replayable order.
+- Stop expansion by minimum candidate count, radius, or scan budget.
+- Run the exact score function and top-k selection inside the candidate set.
+- Fall back to the exact scan when candidate recall or substitute quality is below threshold.
+
+Success criteria:
+
+- Results are deterministic for the same fixture and state snapshot.
+- Hard-constraint violation rate is zero.
+- Candidate recall, top-k overlap, substitute distance delta, and scanned-candidate reduction are reported.
+- p99 latency improves over full exact scan for at least one `65536+` agent workload.
+- The exact router remains available as the correctness oracle and low-agent-count path.
+
 ### Phase 5: Integration Boundary
 
 Define how the larger middleware will call Q-TOM.
@@ -521,6 +587,7 @@ Compare:
 - CUDA simple kernel.
 - CUDA optimized kernels from Phase 3.
 - Production batch route profile with observed-candidate debug telemetry disabled.
+- Lossy deterministic candidate generation against the exact CPU/GPU router.
 
 ### Workload Matrix
 
@@ -532,6 +599,7 @@ Compare:
 | Batch size | 1, 8, 32, 128, 512, 2048 |
 | Availability | 100%, 90%, 75%, top-k nearest unavailable |
 | Neighborhood radius | adaptive radius for at least 3 observed candidates |
+| Candidate generation | exact full scan, lossy deterministic projection |
 | Queue pressure | none, mild, severe |
 | Latency pressure | none, one cluster degraded, random degraded |
 
@@ -548,6 +616,8 @@ Report:
 - Host-to-device and device-to-host transfer time.
 - Kernel execution time.
 - CPU/GPU result mismatch rate.
+- Candidate recall against exact full scan.
+- Scanned-candidate reduction.
 - Top-k overlap with CPU reference.
 - Observed-best unavailable rate.
 - Fallback rate.
