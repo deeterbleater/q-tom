@@ -167,6 +167,8 @@ pub struct AgentRouteTable {
 
 The CPU router uses this packed table as its internal scan source. Distance scoring uses blocked accumulation over four-float chunks so LLVM can schedule the small fixed-width vector math more effectively. This keeps the correctness oracle closer to the future CUDA buffer layout while preserving ergonomic registry structs at the API boundary.
 
+Production CPU batch routing keeps the per-request path for small registries and switches to a blocked scanner for larger registries. The blocked scanner processes a small request block against agent blocks, reusing each agent vector and runtime penalty factors across multiple tasks while preserving the same ordered `RoutingResult` output.
+
 ### 5.2 Live State
 
 ```rust

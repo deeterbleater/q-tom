@@ -1,11 +1,16 @@
 use crate::route_table::AgentRouteTable;
-use crate::score::{ScoreCoefficients, ScoreComponents, score_components_for_vector};
+use crate::score::{
+    ScoreCoefficients, ScoreComponents, dist_sq_blocked, score_components_for_vector,
+};
 use crate::types::{
     AgentProfile, AgentRuntimeState, RouteCandidate, RouteDebugInfo, RouteError, RoutingRequest,
     RoutingResult,
 };
 
 const STACK_TOP_K_CAP: usize = 8;
+const PRODUCTION_BLOCKED_MIN_AGENTS: usize = 32_768;
+const PRODUCTION_REQUEST_BLOCK: usize = 8;
+const PRODUCTION_AGENT_BLOCK: usize = 256;
 
 pub trait RouterBackend {
     fn route_batch(
@@ -225,11 +230,7 @@ impl CpuRouter {
                 .chunks(chunk_size)
                 .map(|chunk| {
                     scope.spawn(move || {
-                        let mut results = Vec::with_capacity(chunk.len());
-                        for request in chunk {
-                            results.push(self.route_one_validated(request, states, route_table)?);
-                        }
-                        Ok::<_, RouteError>(results)
+                        self.route_batch_validated_worker_chunk(chunk, states, route_table)
                     })
                 })
                 .collect::<Vec<_>>();
@@ -293,10 +294,65 @@ impl CpuRouter {
         states: &[AgentRuntimeState],
         route_table: &AgentRouteTable,
     ) -> Result<Vec<RoutingResult>, RouteError> {
+        self.route_batch_validated_worker_chunk(requests, states, route_table)
+    }
+
+    fn route_batch_validated_worker_chunk(
+        &self,
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+        route_table: &AgentRouteTable,
+    ) -> Result<Vec<RoutingResult>, RouteError> {
+        if self.debug_observed || route_table.len() < PRODUCTION_BLOCKED_MIN_AGENTS {
+            return self.route_batch_validated_per_request(requests, states, route_table);
+        }
+
+        Ok(self.route_batch_validated_production(requests, states, route_table))
+    }
+
+    fn route_batch_validated_per_request(
+        &self,
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+        route_table: &AgentRouteTable,
+    ) -> Result<Vec<RoutingResult>, RouteError> {
         requests
             .iter()
             .map(|request| self.route_one_validated(request, states, route_table))
             .collect()
+    }
+
+    fn route_batch_validated_production(
+        &self,
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+        route_table: &AgentRouteTable,
+    ) -> Vec<RoutingResult> {
+        let mut results = Vec::with_capacity(requests.len());
+
+        for request_block in requests.chunks(PRODUCTION_REQUEST_BLOCK) {
+            let mut accumulators = request_block
+                .iter()
+                .map(|request| ProductionAccumulator::new(request.k))
+                .collect::<Vec<_>>();
+
+            scan_production_request_block(
+                request_block,
+                &mut accumulators,
+                self.coefficients,
+                route_table,
+                states,
+            );
+
+            results.extend(
+                request_block
+                    .iter()
+                    .zip(accumulators)
+                    .map(|(request, accumulator)| accumulator.into_result(request)),
+            );
+        }
+
+        results
     }
 }
 
@@ -366,6 +422,211 @@ fn score_compact_candidate(
 ) -> CompactCandidate {
     let score = score_components_for_vector(request_vector, agent_vector, state, coefficients);
     CompactCandidate::from_score(agent_id, score)
+}
+
+fn scan_production_request_block(
+    requests: &[RoutingRequest],
+    accumulators: &mut [ProductionAccumulator],
+    coefficients: ScoreCoefficients,
+    route_table: &AgentRouteTable,
+    states: &[AgentRuntimeState],
+) {
+    debug_assert_eq!(requests.len(), accumulators.len());
+
+    if route_table.dimensions() == 0 {
+        for agent_start in (0..route_table.len()).step_by(PRODUCTION_AGENT_BLOCK) {
+            let agent_end = (agent_start + PRODUCTION_AGENT_BLOCK).min(route_table.len());
+            for index in agent_start..agent_end {
+                let agent_id = route_table.agent_id(index);
+                let agent_vector = route_table.vector(index);
+                let factors = RuntimeScoreFactors::from_state(states[index], coefficients);
+                push_agent_to_request_block(
+                    requests,
+                    accumulators,
+                    agent_id,
+                    agent_vector,
+                    factors,
+                );
+            }
+        }
+    } else {
+        let dimensions = route_table.dimensions();
+        let packed_vectors = route_table.packed_vectors();
+        let agent_ids = route_table.agent_ids();
+
+        for agent_start in (0..route_table.len()).step_by(PRODUCTION_AGENT_BLOCK) {
+            let agent_end = (agent_start + PRODUCTION_AGENT_BLOCK).min(route_table.len());
+            for index in agent_start..agent_end {
+                let vector_start = index * dimensions;
+                let agent_vector = &packed_vectors[vector_start..vector_start + dimensions];
+                let factors = RuntimeScoreFactors::from_state(states[index], coefficients);
+                push_agent_to_request_block(
+                    requests,
+                    accumulators,
+                    agent_ids[index],
+                    agent_vector,
+                    factors,
+                );
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn push_agent_to_request_block(
+    requests: &[RoutingRequest],
+    accumulators: &mut [ProductionAccumulator],
+    agent_id: u32,
+    agent_vector: &[f32],
+    factors: RuntimeScoreFactors,
+) {
+    for (request, accumulator) in requests.iter().zip(accumulators.iter_mut()) {
+        accumulator.push(score_compact_candidate_with_factors(
+            &request.vector,
+            agent_id,
+            agent_vector,
+            factors,
+        ));
+    }
+}
+
+#[inline(always)]
+fn score_compact_candidate_with_factors(
+    request_vector: &[f32],
+    agent_id: u32,
+    agent_vector: &[f32],
+    factors: RuntimeScoreFactors,
+) -> CompactCandidate {
+    let base_distance = dist_sq_blocked(request_vector, agent_vector);
+    let effective_distance = if factors.available {
+        base_distance * factors.omega
+    } else {
+        f32::INFINITY
+    };
+
+    CompactCandidate {
+        agent_id,
+        effective_distance,
+        base_distance,
+        omega: factors.omega,
+        queue_penalty: factors.queue_penalty,
+        latency_penalty: factors.latency_penalty,
+        cache_penalty: factors.cache_penalty,
+        available: factors.available,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeScoreFactors {
+    omega: f32,
+    queue_penalty: f32,
+    latency_penalty: f32,
+    cache_penalty: f32,
+    available: bool,
+}
+
+impl RuntimeScoreFactors {
+    #[inline(always)]
+    fn from_state(state: AgentRuntimeState, coefficients: ScoreCoefficients) -> Self {
+        let queue_penalty = coefficients.alpha_queue * state.queue_depth_norm;
+        let latency_penalty = coefficients.beta_latency * state.latency_norm;
+        let cache_penalty = coefficients.gamma_cache * state.cache_pressure_norm;
+        Self {
+            omega: 1.0 + queue_penalty + latency_penalty + cache_penalty,
+            queue_penalty,
+            latency_penalty,
+            cache_penalty,
+            available: state.is_available(),
+        }
+    }
+}
+
+struct ProductionAccumulator {
+    observed_best: BestCandidate,
+    available: ProductionAvailableAccumulator,
+}
+
+impl ProductionAccumulator {
+    fn new(k: usize) -> Self {
+        Self {
+            observed_best: BestCandidate::new(CandidateSort::Observed, k > 0),
+            available: ProductionAvailableAccumulator::new(k),
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, candidate: CompactCandidate) {
+        self.observed_best.push(candidate);
+        if candidate.available {
+            self.available.push(candidate);
+        }
+    }
+
+    fn into_result(self, request: &RoutingRequest) -> RoutingResult {
+        let ideal_candidate_unavailable = self.observed_best.ideal_candidate_unavailable();
+        let mut available_candidates = self
+            .available
+            .into_vec()
+            .into_iter()
+            .map(CompactCandidate::into_route_candidate)
+            .collect::<Vec<_>>();
+
+        let used_fallback = available_candidates
+            .first()
+            .map(|candidate| candidate.base_distance > request.radius_max_threshold)
+            .unwrap_or(true);
+
+        if used_fallback {
+            available_candidates.push(RouteCandidate {
+                agent_id: request.fallback_generalist_id,
+                effective_distance: f32::INFINITY,
+                base_distance: f32::INFINITY,
+                omega: 1.0,
+                queue_penalty: 0.0,
+                latency_penalty: 0.0,
+                cache_penalty: 0.0,
+                available: true,
+            });
+        }
+
+        RoutingResult {
+            task_id: request.task_id,
+            available_candidates,
+            used_fallback,
+            ideal_candidate_unavailable,
+            debug: None,
+        }
+    }
+}
+
+enum ProductionAvailableAccumulator {
+    Best(BestCandidate),
+    TopK(BoundedTopK),
+}
+
+impl ProductionAvailableAccumulator {
+    fn new(k: usize) -> Self {
+        if k == 1 {
+            Self::Best(BestCandidate::new(CandidateSort::Available, true))
+        } else {
+            Self::TopK(BoundedTopK::new(k, CandidateSort::Available))
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, candidate: CompactCandidate) {
+        match self {
+            Self::Best(best) => best.push(candidate),
+            Self::TopK(top_k) => top_k.push(candidate),
+        }
+    }
+
+    fn into_vec(self) -> Vec<CompactCandidate> {
+        match self {
+            Self::Best(best) => best.into_candidate().into_iter().collect(),
+            Self::TopK(top_k) => top_k.into_vec(),
+        }
+    }
 }
 
 struct BestCandidate {
@@ -876,6 +1137,55 @@ mod tests {
     }
 
     #[test]
+    fn production_batch_matches_individual_routes() {
+        let router = CpuRouter::new(
+            vec![
+                agent(1, &[0.0, 0.0]),
+                agent(2, &[0.1, 0.0]),
+                agent(3, &[1.0, 1.0]),
+                agent(4, &[0.2, 0.2]),
+                agent(5, &[0.3, 0.1]),
+            ],
+            ScoreCoefficients::default(),
+        )
+        .with_debug_observed(false);
+        let states = vec![
+            AgentRuntimeState::unavailable(),
+            AgentRuntimeState::available(),
+            AgentRuntimeState::available(),
+            AgentRuntimeState::available(),
+            AgentRuntimeState::available(),
+        ];
+        let requests = vec![
+            request_with_task_id(1, &[0.05, 0.0], 1, 999, 10.0),
+            request_with_task_id(2, &[0.15, 0.0], 3, 999, 10.0),
+            request_with_task_id(3, &[0.95, 1.0], 8, 999, 10.0),
+            request_with_task_id(4, &[10.0, 10.0], 2, 42, 1.0),
+        ];
+
+        let individual = requests
+            .iter()
+            .map(|request| router.route_one(request, &states).unwrap())
+            .collect::<Vec<_>>();
+        let route_table = router.validate_batch(&requests, &states).unwrap();
+        let blocked = router.route_batch_validated_production(&requests, &states, route_table);
+        let batched = router
+            .route_batch_with_workers(&requests, &states, 2)
+            .unwrap();
+
+        assert_eq!(blocked, individual);
+        assert_eq!(batched, individual);
+        assert!(batched.iter().all(|result| result.debug.is_none()));
+        assert_eq!(
+            batched
+                .iter()
+                .map(|result| result.task_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+    }
+
+    #[test]
     fn empty_batch_returns_empty_results() {
         let router = CpuRouter::new(vec![agent(1, &[0.0, 0.0])], ScoreCoefficients::default());
         let results = router
@@ -945,8 +1255,18 @@ mod tests {
         fallback_generalist_id: u32,
         radius: f32,
     ) -> RoutingRequest {
+        request_with_task_id(100, vector, k, fallback_generalist_id, radius)
+    }
+
+    fn request_with_task_id(
+        task_id: u64,
+        vector: &[f32],
+        k: usize,
+        fallback_generalist_id: u32,
+        radius: f32,
+    ) -> RoutingRequest {
         RoutingRequest {
-            task_id: 100,
+            task_id,
             vector: vector.to_vec(),
             k,
             fallback_generalist_id,
