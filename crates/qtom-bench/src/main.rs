@@ -5,7 +5,7 @@ use qtom_core::{
     score::{dist_sq, dist_sq_blocked},
     write_golden_fixture,
 };
-use qtom_cuda::CudaRouter;
+use qtom_cuda::{CudaRouteK1Executor, CudaRouter, CudaRuntime};
 use std::env;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -196,6 +196,8 @@ fn run_cuda_timing(path: &Path) {
     let requests = golden.fixture.requests;
     let states = golden.fixture.states;
     let agents = golden.fixture.agents;
+    let route_table =
+        AgentRouteTable::from_agent_slice(&agents).expect("golden fixture should be valid");
     let cpu_sequential = CpuWorkerBackend::new("cpu-sequential", agents.clone(), 1);
     let cpu_parallel = CpuWorkerBackend::new("cpu-parallel", agents.clone(), workers);
     let cuda = CudaRouter::new(agents, ScoreCoefficients::default());
@@ -243,7 +245,17 @@ fn run_cuda_timing(path: &Path) {
         CUDA_TIMING_ITERATIONS,
     );
     print_backend_timing(&cuda, &requests, &states, 0, CUDA_TIMING_ITERATIONS);
+    let reuse_runtime = CudaRuntime::initialize().expect("CUDA runtime should initialize");
+    let reuse_executor = CudaRouteK1Executor::new(&reuse_runtime, ScoreCoefficients::default())
+        .expect("CUDA route executor should initialize");
+    let cuda_reuse = CudaReuseBackend {
+        name: "cuda-reuse",
+        executor: reuse_executor,
+        route_table,
+    };
+    print_backend_timing(&cuda_reuse, &requests, &states, 0, CUDA_TIMING_ITERATIONS);
     print_cuda_timing_breakdown(&cuda, &requests, &states, CUDA_TIMING_ITERATIONS);
+    print_cuda_reuse_timing_breakdown(&cuda_reuse, &requests, &states, CUDA_TIMING_ITERATIONS);
 }
 
 fn run_cuda_plan(path: &Path) {
@@ -257,7 +269,7 @@ fn run_cuda_plan(path: &Path) {
         .expect("golden fixture should produce a CUDA buffer plan");
 
     println!(
-        "cuda_plan,path={},backend={},available={},reason=\"{}\",runtime_available={},runtime_devices={},runtime_reason=\"{}\",agents={},tasks={},dims={},k={},agent_vector_f32={},request_vector_f32={},output_slots={},total_f32={},total_u32={}",
+        "cuda_plan,path={},backend={},available={},reason=\"{}\",runtime_available={},runtime_devices={},runtime_reason=\"{}\",agents={},tasks={},dims={},k={},agent_vector_f32={},request_vector_f32={},agent_score_weight_f32={},output_slots={},total_f32={},total_u32={}",
         path.display(),
         router.name(),
         status.available,
@@ -271,6 +283,7 @@ fn run_cuda_plan(path: &Path) {
         plan.k,
         plan.agent_vector_f32_len,
         plan.request_vector_f32_len,
+        plan.agent_score_weight_f32_len,
         plan.output_candidate_u32_len,
         plan.total_f32_len(),
         plan.total_u32_len()
@@ -351,17 +364,20 @@ fn print_cuda_timing_breakdown(
 ) {
     let report = time_cuda_route_breakdown(cuda, requests, states, iterations);
     println!(
-        "cuda_timing_breakdown_columns,avg_total_ms,avg_runtime_init_ms,avg_host_prepare_ms,avg_device_allocate_ms,avg_host_to_device_ms,avg_module_stream_setup_ms,avg_kernel_launch_sync_ms,avg_device_to_host_ms,avg_decode_ms"
+        "cuda_timing_breakdown_columns,avg_total_ms,avg_runtime_init_ms,avg_runtime_teardown_ms,avg_host_prepare_ms,avg_device_allocate_ms,avg_host_to_device_ms,avg_module_stream_setup_ms,avg_kernel_launch_sync_ms,avg_kernel_device_ms,avg_kernel_host_overhead_ms,avg_device_to_host_ms,avg_decode_ms"
     );
     println!(
-        "cuda_timing_breakdown,avg_total_ms={:.3},avg_runtime_init_ms={:.3},avg_host_prepare_ms={:.3},avg_device_allocate_ms={:.3},avg_host_to_device_ms={:.3},avg_module_stream_setup_ms={:.3},avg_kernel_launch_sync_ms={:.3},avg_device_to_host_ms={:.3},avg_decode_ms={:.3}",
+        "cuda_timing_breakdown,avg_total_ms={:.3},avg_runtime_init_ms={:.3},avg_runtime_teardown_ms={:.3},avg_host_prepare_ms={:.3},avg_device_allocate_ms={:.3},avg_host_to_device_ms={:.3},avg_module_stream_setup_ms={:.3},avg_kernel_launch_sync_ms={:.3},avg_kernel_device_ms={:.3},avg_kernel_host_overhead_ms={:.3},avg_device_to_host_ms={:.3},avg_decode_ms={:.3}",
         report.avg_total_ms,
         report.avg_runtime_init_ms,
+        report.avg_runtime_teardown_ms,
         report.avg_host_prepare_ms,
         report.avg_device_allocate_ms,
         report.avg_host_to_device_ms,
         report.avg_module_stream_setup_ms,
         report.avg_kernel_launch_sync_ms,
+        report.avg_kernel_device_ms,
+        report.avg_kernel_host_overhead_ms,
         report.avg_device_to_host_ms,
         report.avg_decode_ms
     );
@@ -387,10 +403,82 @@ fn time_cuda_route_breakdown(
     CudaTimingBreakdownReport::from_samples(&samples)
 }
 
+fn print_cuda_reuse_timing_breakdown(
+    cuda_reuse: &CudaReuseBackend<'_>,
+    requests: &[qtom_core::RoutingRequest],
+    states: &[qtom_core::AgentRuntimeState],
+    iterations: usize,
+) {
+    let report = time_cuda_reuse_route_breakdown(cuda_reuse, requests, states, iterations);
+    println!(
+        "cuda_reuse_timing_breakdown_columns,avg_total_ms,avg_runtime_init_ms,avg_runtime_teardown_ms,avg_host_prepare_ms,avg_device_allocate_ms,avg_host_to_device_ms,avg_module_stream_setup_ms,avg_kernel_launch_sync_ms,avg_kernel_device_ms,avg_kernel_host_overhead_ms,avg_device_to_host_ms,avg_decode_ms"
+    );
+    println!(
+        "cuda_reuse_timing_breakdown,avg_total_ms={:.3},avg_runtime_init_ms={:.3},avg_runtime_teardown_ms={:.3},avg_host_prepare_ms={:.3},avg_device_allocate_ms={:.3},avg_host_to_device_ms={:.3},avg_module_stream_setup_ms={:.3},avg_kernel_launch_sync_ms={:.3},avg_kernel_device_ms={:.3},avg_kernel_host_overhead_ms={:.3},avg_device_to_host_ms={:.3},avg_decode_ms={:.3}",
+        report.avg_total_ms,
+        report.avg_runtime_init_ms,
+        report.avg_runtime_teardown_ms,
+        report.avg_host_prepare_ms,
+        report.avg_device_allocate_ms,
+        report.avg_host_to_device_ms,
+        report.avg_module_stream_setup_ms,
+        report.avg_kernel_launch_sync_ms,
+        report.avg_kernel_device_ms,
+        report.avg_kernel_host_overhead_ms,
+        report.avg_device_to_host_ms,
+        report.avg_decode_ms
+    );
+}
+
+fn time_cuda_reuse_route_breakdown(
+    cuda_reuse: &CudaReuseBackend<'_>,
+    requests: &[qtom_core::RoutingRequest],
+    states: &[qtom_core::AgentRuntimeState],
+    iterations: usize,
+) -> CudaTimingBreakdownReport {
+    cuda_reuse
+        .executor
+        .route_batch_with_timing(&cuda_reuse.route_table, requests, states)
+        .expect("CUDA reuse warmup should route fixture");
+    let mut samples = Vec::with_capacity(iterations);
+
+    for _ in 0..iterations {
+        let timed = cuda_reuse
+            .executor
+            .route_batch_with_timing(&cuda_reuse.route_table, requests, states)
+            .expect("CUDA reuse should route fixture");
+        samples.push(timed.timing);
+    }
+
+    CudaTimingBreakdownReport::from_samples(&samples)
+}
+
 struct CpuWorkerBackend {
     name: &'static str,
     router: CpuRouter,
     workers: usize,
+}
+
+struct CudaReuseBackend<'runtime> {
+    name: &'static str,
+    executor: CudaRouteK1Executor<'runtime>,
+    route_table: AgentRouteTable,
+}
+
+impl RouterBackend for CudaReuseBackend<'_> {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn route_batch(
+        &self,
+        requests: &[qtom_core::RoutingRequest],
+        states: &[qtom_core::AgentRuntimeState],
+    ) -> Result<Vec<qtom_core::RoutingResult>, qtom_core::RouteError> {
+        self.executor
+            .route_batch_with_timing(&self.route_table, requests, states)
+            .map(|timed| timed.results)
+    }
 }
 
 impl CpuWorkerBackend {
@@ -873,11 +961,14 @@ fn checksum_results(results: &[qtom_core::RoutingResult]) -> f64 {
 struct CudaTimingBreakdownReport {
     avg_total_ms: f64,
     avg_runtime_init_ms: f64,
+    avg_runtime_teardown_ms: f64,
     avg_host_prepare_ms: f64,
     avg_device_allocate_ms: f64,
     avg_host_to_device_ms: f64,
     avg_module_stream_setup_ms: f64,
     avg_kernel_launch_sync_ms: f64,
+    avg_kernel_device_ms: f64,
+    avg_kernel_host_overhead_ms: f64,
     avg_device_to_host_ms: f64,
     avg_decode_ms: f64,
 }
@@ -893,6 +984,10 @@ impl CudaTimingBreakdownReport {
             avg_total_ms: avg_duration_ms(samples.iter().map(|sample| sample.total), count),
             avg_runtime_init_ms: avg_duration_ms(
                 samples.iter().map(|sample| sample.runtime_init),
+                count,
+            ),
+            avg_runtime_teardown_ms: avg_duration_ms(
+                samples.iter().map(|sample| sample.runtime_teardown),
                 count,
             ),
             avg_host_prepare_ms: avg_duration_ms(
@@ -915,6 +1010,19 @@ impl CudaTimingBreakdownReport {
                 samples.iter().map(|sample| sample.kernel_launch_sync),
                 count,
             ),
+            avg_kernel_device_ms: avg_duration_ms(
+                samples.iter().map(|sample| sample.kernel_device),
+                count,
+            ),
+            avg_kernel_host_overhead_ms: samples
+                .iter()
+                .map(|sample| {
+                    (sample.kernel_launch_sync.as_secs_f64() - sample.kernel_device.as_secs_f64())
+                        .max(0.0)
+                        * 1000.0
+                })
+                .sum::<f64>()
+                / count,
             avg_device_to_host_ms: avg_duration_ms(
                 samples.iter().map(|sample| sample.device_to_host),
                 count,

@@ -22,7 +22,7 @@ Q-TOM is a Rust prototype for topology-aware agent routing. The CPU implementati
 - typed RAII wrappers for CUDA modules and function handles
 - typed synchronous host/device copies for `f32` and `u32` buffers
 - typed `qtom_route_agents_k1` parameter packing and synchronous launch
-- naive `k = 1` CUDA scoring kernel with a tiny CPU parity test
+- conservative `k = 1` CUDA scoring kernel with a tiny CPU parity test
 - internal `k = 1` CUDA execution helper that decodes `RoutingResult` values, including fallback/radius behavior
 - deterministic generated-fixture parity for decoded `k = 1` CUDA results
 - public `CudaRouter::route_batch` gate for valid `k = 1` CUDA routing under `cuda-runtime`
@@ -78,7 +78,7 @@ crates/qtom-core/src/backend.rs     shared RouterBackend trait and parity harnes
 crates/qtom-core/src/cpu_router.rs  CPU correctness oracle
 crates/qtom-core/src/golden.rs      golden fixture reader/writer
 crates/qtom-cuda/src/lib.rs         CUDA scaffold, buffer plan, copies, and launch boundary
-crates/qtom-cuda/kernels/route_agents.cu  naive k=1 CUDA kernel source
+crates/qtom-cuda/kernels/route_agents.cu  k=1 CUDA kernel source
 crates/qtom-cuda/kernels/route_agents.ptx checked-in PTX artifact
 crates/qtom-bench/src/main.rs       benchmark and fixture CLI
 docs/cuda-safety.md                 CUDA memory-safety constraints
@@ -107,33 +107,36 @@ Recent Windows RTX 4060 whole-batch timing at `8192 agents / 2048 tasks / 16 dim
 
 ```text
 cpu-sequential avg_batch_ms ~= 81.9
-cpu-parallel   avg_batch_ms ~= 8.5
-cuda           avg_batch_ms ~= 71.9
+cpu-parallel   avg_batch_ms ~= 9.6
+cuda           avg_batch_ms ~= 68.0
+cuda-reuse     avg_batch_ms ~= 5.0
 ```
 
-Treat this as a correctness-first baseline for the current public CUDA path. It includes runtime setup, allocation, host/device copies, kernel launch/sync, copy-back, and decode.
+Treat this as a correctness-first baseline. The `cuda` row measures the public router path with setup paid per call. The `cuda-reuse` row reuses runtime/module/buffer resources for the fixed golden shape.
 
 Current CUDA timing breakdown:
 
 ```text
-runtime_init_ms       ~= 42.2
-host_prepare_ms       ~= 0.1
-device_allocate_ms    ~= 0.1
-host_to_device_ms     ~= 0.4
-module_stream_setup_ms ~= 9.9
-kernel_launch_sync_ms ~= 5.6
-device_to_host_ms     ~= 0.1
-decode_ms             ~= 1.7
+cuda-reuse total_ms              ~= 5.0
+cuda-reuse host_prepare_ms       ~= 0.0
+cuda-reuse device_allocate_ms    ~= 0.0
+cuda-reuse host_to_device_ms     ~= 0.2
+cuda-reuse module_stream_setup_ms ~= 0.0
+cuda-reuse kernel_launch_sync_ms ~= 4.7-5.1
+cuda-reuse kernel_device_ms      ~= 4.6-5.1
+cuda-reuse kernel_host_overhead_ms ~= 0.0
+cuda-reuse device_to_host_ms     ~= 0.1
+cuda-reuse decode_ms             ~= 0.1
 ```
 
-The first obvious cost center is setup, not transfer. Reuse runtime/module resources before kernel-level optimization.
+After runtime/module/buffer reuse, decode lookup cleanup, CUDA event timing, a `dimensions == 16` unrolled distance path, and precomputed per-agent score weights, the obvious cost center is still actual device work scanning every agent for every request. Launch/sync overhead, allocation, transfer, and decode are not the current bottlenecks for this fixture.
 
 ## Design Constraints
 
 - CPU remains the correctness oracle.
 - CUDA must match CPU on golden fixtures before optimization.
 - CUDA runtime and kernel work must follow `docs/cuda-safety.md`.
-- The first CUDA kernel should be naive and boring.
+- CUDA kernel changes should stay conservative and parity-first.
 - Start with `k = 1`, one CUDA thread routing one task against all agents.
 - Do not optimize until CPU/GPU parity is proven.
 - Lossy deterministic candidate generation is a later scale feature, not the next task.
@@ -143,21 +146,22 @@ The first obvious cost center is setup, not transfer. Reuse runtime/module resou
 Continue from:
 
 ```text
-Reuse CUDA runtime/module resources across public k = 1 batches.
+Reduce repeated full-agent-scan work in the k = 1 CUDA path without widening beyond k = 1.
 ```
 
 Recommended next implementation slice:
 
 1. Keep all CUDA execution behind `cuda-runtime`.
-2. Add a reusable `CudaRouteK1Executor`-style internal object that owns the runtime, module, and route kernel lookup.
-3. Keep per-call device buffers temporary at first; do not add buffer pooling yet.
+2. Preserve the CUDA event timing columns while changing kernel internals.
+3. Keep CPU/CUDA parity checks before timing comparisons.
 4. Preserve `BackendUnavailable` or shape errors for all unsupported cases.
 5. Keep CPU parity tests for tiny and deterministic generated fixtures with debug telemetry disabled.
 6. Keep default non-CUDA builds compiling.
-7. Do not optimize or add `k > 1` until this narrow path is stable.
+7. Do not add `k > 1` until the optimized `k = 1` path remains stable.
+8. Prefer a measured next step such as tiled/shared-memory request or agent reuse, and keep exact CPU parity as the gate.
 
 ## Prompt To Use In New Codex Thread
 
 ```text
-Continue Q-TOM CUDA scaffold from docs/windows-handoff.md. Start by reusing CUDA runtime/module resources across public CudaRouter::route_batch calls on the narrow k = 1 CUDA golden fixture while preserving BackendUnavailable for unsupported cases. Keep per-call buffers temporary for now. Keep non-CUDA hosts compiling. Do not optimize the kernel yet; preserve CPU/golden-fixture parity as the goal.
+Continue Q-TOM CUDA scaffold from docs/windows-handoff.md. The k = 1 CUDA path now has CUDA event timing, a dimensions == 16 unrolled distance path, and precomputed per-agent score weights; reusable RTX 4060 timing is roughly 5 ms for the 8192x2048d16 fixture. Start the next measured kernel-body improvement, likely reducing repeated full-agent-scan work, while preserving BackendUnavailable for unsupported cases, keeping non-CUDA hosts compiling, and preserving CPU/golden-fixture parity as the goal.
 ```

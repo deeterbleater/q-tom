@@ -457,18 +457,19 @@ Initial scaffold:
 - CUDA module ownership starts with typed RAII wrappers for checked-in PTX and function handles.
 - CUDA copy ownership starts with exact-length typed `f32` and `u32` host/device copies.
 - CUDA launch ownership starts with q-tom-specific typed parameter packing for `qtom_route_agents_k1`.
-- The first naive `k = 1` CUDA scoring kernel matches CPU output on a tiny feature-gated parity fixture.
+- The conservative `k = 1` CUDA scoring kernel matches CPU output on a tiny feature-gated parity fixture.
+- The `k = 1` CUDA scoring kernel keeps one thread per request, but now uses a fixed `dimensions == 16` unrolled distance path for the golden fixture shape and receives precomputed per-agent score weights to avoid repeated runtime-penalty math in the hot loop.
 - The internal `k = 1` CUDA execution helper decodes output arrays into CPU-shaped `RoutingResult` values, including fallback/radius behavior.
 - Decoded `k = 1` CUDA routing matches CPU output on a deterministic generated fixture.
 - Public `CudaRouter::route_batch` uses the decoded `k = 1` path only when `cuda-runtime` is enabled, the driver initializes, and all request/state shapes validate; unsupported `k` values return `BackendUnavailable`.
 - The benchmark CLI can write a deterministic `k = 1` CUDA golden fixture and compare CPU routing against public `CudaRouter::route_batch` through the shared tolerant backend parity harness. Route decisions remain exact; only floating score fields have tolerance.
-- The benchmark CLI can time whole public `k = 1` CUDA route batches against CPU backends after parity is checked, including a CUDA stage breakdown for setup, transfer, kernel launch/sync, and decode.
+- The benchmark CLI can time whole public `k = 1` CUDA route batches against CPU backends after parity is checked, including a CUDA stage breakdown for setup, transfer, host launch/sync wall time, CUDA event device time, inferred host overhead, and decode. The timing path can also reuse runtime/module/buffer resources for repeated fixed-shape `k = 1` batches and avoids per-result linear agent-id lookup during decode.
 
 Kernel shape:
 
 - One CUDA thread routes one task against all agents.
 - Agent vectors are stored as flat contiguous `float32`.
-- State metrics are stored as separate flat `float32` arrays or a compact state matrix.
+- Runtime state metrics are normalized on the host; the current CUDA `k = 1` path precomputes a per-agent score-weight vector before launch.
 - Output arrays contain available top-k candidate IDs, observed top-k candidate IDs, score components, and fallback flags.
 
 This is not the final fastest design. It is the simplest correctness-first GPU implementation.

@@ -36,6 +36,11 @@ const CUDA_DEVICE_TO_HOST_COPY_FAILED_REASON: &str = "CUDA device-to-host copy f
 const CUDA_STREAM_CREATE_FAILED_REASON: &str = "CUDA stream create failed";
 const CUDA_STREAM_DESTROY_FAILED_REASON: &str = "CUDA stream destroy failed";
 const CUDA_STREAM_SYNCHRONIZE_FAILED_REASON: &str = "CUDA stream synchronize failed";
+const CUDA_EVENT_CREATE_FAILED_REASON: &str = "CUDA event create failed";
+const CUDA_EVENT_DESTROY_FAILED_REASON: &str = "CUDA event destroy failed";
+const CUDA_EVENT_RECORD_FAILED_REASON: &str = "CUDA event record failed";
+const CUDA_EVENT_SYNCHRONIZE_FAILED_REASON: &str = "CUDA event synchronize failed";
+const CUDA_EVENT_ELAPSED_TIME_FAILED_REASON: &str = "CUDA event elapsed time query failed";
 const CUDA_MODULE_IMAGE_CONTAINS_NUL_REASON: &str = "CUDA module image contains an interior nul";
 const CUDA_MODULE_LOAD_FAILED_REASON: &str = "CUDA module load failed";
 const CUDA_MODULE_UNLOAD_FAILED_REASON: &str = "CUDA module unload failed";
@@ -112,6 +117,10 @@ impl CudaRouter {
             )
             .map_err(cuda_route_execution_error_to_route_error)?;
             timed.timing.runtime_init = runtime_init;
+
+            let runtime_teardown_start = std::time::Instant::now();
+            drop(runtime);
+            timed.timing.runtime_teardown = runtime_teardown_start.elapsed();
             timed.timing.total = total_start.elapsed();
             Ok(timed)
         }
@@ -152,13 +161,153 @@ pub struct CudaTimedRoutingResult {
 pub struct CudaRouteTimingBreakdown {
     pub total: std::time::Duration,
     pub runtime_init: std::time::Duration,
+    pub runtime_teardown: std::time::Duration,
     pub host_prepare: std::time::Duration,
     pub device_allocate: std::time::Duration,
     pub host_to_device: std::time::Duration,
     pub module_stream_setup: std::time::Duration,
     pub kernel_launch_sync: std::time::Duration,
+    pub kernel_device: std::time::Duration,
     pub device_to_host: std::time::Duration,
     pub decode: std::time::Duration,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct CudaRouteK1Executor<'runtime> {
+    runtime: &'runtime CudaRuntime,
+    coefficients: ScoreCoefficients,
+    #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+    module: CudaModule<'runtime>,
+    #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+    workspace: std::cell::RefCell<Option<CudaRouteK1Workspace<'runtime>>>,
+}
+
+impl<'runtime> CudaRouteK1Executor<'runtime> {
+    pub fn new(
+        runtime: &'runtime CudaRuntime,
+        coefficients: ScoreCoefficients,
+    ) -> Result<Self, RouteError> {
+        #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+        {
+            let module = runtime
+                .load_route_agents_module()
+                .map_err(cuda_runtime_error_to_route_error)?;
+            Ok(Self {
+                runtime,
+                coefficients,
+                module,
+                workspace: std::cell::RefCell::new(None),
+            })
+        }
+        #[cfg(not(all(feature = "cuda-runtime", any(windows, target_os = "linux"))))]
+        {
+            let _ = runtime;
+            let _ = coefficients;
+            Err(RouteError::BackendUnavailable {
+                backend: CUDA_BACKEND_NAME,
+                reason: runtime_unavailable_error().status().reason,
+            })
+        }
+    }
+
+    pub fn route_batch_with_timing(
+        &self,
+        route_table: &AgentRouteTable,
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+    ) -> Result<CudaTimedRoutingResult, RouteError> {
+        if requests.is_empty() {
+            return Ok(CudaTimedRoutingResult {
+                results: Vec::new(),
+                timing: CudaRouteTimingBreakdown::default(),
+            });
+        }
+
+        #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+        {
+            validate_k_one_inputs(route_table, requests, states)
+                .map_err(cuda_route_execution_error_to_route_error)?;
+            let plan = CudaBufferPlan::try_new(
+                route_table.len(),
+                requests.len(),
+                route_table.dimensions(),
+                1,
+            )?;
+            let mut workspace = self.workspace.borrow_mut();
+            let replace_workspace = workspace
+                .as_ref()
+                .map(|workspace| workspace.plan != plan)
+                .unwrap_or(true);
+            if replace_workspace {
+                *workspace = Some(
+                    CudaRouteK1Workspace::new(self.runtime, plan)
+                        .map_err(cuda_runtime_error_to_route_error)?,
+                );
+            }
+            let workspace = workspace
+                .as_mut()
+                .expect("CUDA route executor workspace should be initialized");
+
+            execute_route_agents_k1_timed_with_workspace(
+                self.runtime,
+                &self.module,
+                workspace,
+                route_table,
+                self.coefficients,
+                requests,
+                states,
+            )
+            .map_err(cuda_route_execution_error_to_route_error)
+        }
+        #[cfg(not(all(feature = "cuda-runtime", any(windows, target_os = "linux"))))]
+        {
+            let _ = route_table;
+            let _ = requests;
+            let _ = states;
+            Err(RouteError::BackendUnavailable {
+                backend: CUDA_BACKEND_NAME,
+                reason: runtime_unavailable_error().status().reason,
+            })
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+#[derive(Debug)]
+struct CudaRouteK1Workspace<'runtime> {
+    plan: CudaBufferPlan,
+    agent_vectors: CudaDeviceBuffer<'runtime, f32>,
+    agent_ids: CudaDeviceBuffer<'runtime, u32>,
+    request_vectors: CudaDeviceBuffer<'runtime, f32>,
+    agent_score_weights: CudaDeviceBuffer<'runtime, f32>,
+    availability: CudaDeviceBuffer<'runtime, u32>,
+    output_agent_ids: CudaDeviceBuffer<'runtime, u32>,
+    output_effective_distances: CudaDeviceBuffer<'runtime, f32>,
+    output_base_distances: CudaDeviceBuffer<'runtime, f32>,
+    output_flags: CudaDeviceBuffer<'runtime, u32>,
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+impl<'runtime> CudaRouteK1Workspace<'runtime> {
+    fn new(runtime: &'runtime CudaRuntime, plan: CudaBufferPlan) -> Result<Self, CudaRuntimeError> {
+        Ok(Self {
+            plan,
+            agent_vectors: runtime.allocate_device_buffer::<f32>(plan.agent_vector_f32_len)?,
+            agent_ids: runtime.allocate_device_buffer::<u32>(plan.agent_id_u32_len)?,
+            request_vectors: runtime.allocate_device_buffer::<f32>(plan.request_vector_f32_len)?,
+            agent_score_weights: runtime
+                .allocate_device_buffer::<f32>(plan.agent_score_weight_f32_len)?,
+            availability: runtime.allocate_device_buffer::<u32>(plan.availability_u32_len)?,
+            output_agent_ids: runtime
+                .allocate_device_buffer::<u32>(plan.output_candidate_u32_len)?,
+            output_effective_distances: runtime
+                .allocate_device_buffer::<f32>(plan.output_effective_f32_len)?,
+            output_base_distances: runtime
+                .allocate_device_buffer::<f32>(plan.output_base_f32_len)?,
+            output_flags: runtime.allocate_device_buffer::<u32>(plan.output_flag_u32_len)?,
+        })
+    }
 }
 
 impl RouterBackend for CudaRouter {
@@ -269,6 +418,11 @@ pub enum CudaRuntimeError {
     StreamCreateFailed(i32),
     StreamDestroyFailed(i32),
     StreamSynchronizeFailed(i32),
+    EventCreateFailed(i32),
+    EventDestroyFailed(i32),
+    EventRecordFailed(i32),
+    EventSynchronizeFailed(i32),
+    EventElapsedTimeFailed(i32),
     ModuleImageContainsNul,
     ModuleLoadFailed(i32),
     ModuleUnloadFailed(i32),
@@ -335,6 +489,21 @@ impl CudaRuntimeError {
             }
             Self::StreamSynchronizeFailed(code) => {
                 CudaRuntimeStatus::unavailable(CUDA_STREAM_SYNCHRONIZE_FAILED_REASON, Some(code))
+            }
+            Self::EventCreateFailed(code) => {
+                CudaRuntimeStatus::unavailable(CUDA_EVENT_CREATE_FAILED_REASON, Some(code))
+            }
+            Self::EventDestroyFailed(code) => {
+                CudaRuntimeStatus::unavailable(CUDA_EVENT_DESTROY_FAILED_REASON, Some(code))
+            }
+            Self::EventRecordFailed(code) => {
+                CudaRuntimeStatus::unavailable(CUDA_EVENT_RECORD_FAILED_REASON, Some(code))
+            }
+            Self::EventSynchronizeFailed(code) => {
+                CudaRuntimeStatus::unavailable(CUDA_EVENT_SYNCHRONIZE_FAILED_REASON, Some(code))
+            }
+            Self::EventElapsedTimeFailed(code) => {
+                CudaRuntimeStatus::unavailable(CUDA_EVENT_ELAPSED_TIME_FAILED_REASON, Some(code))
             }
             Self::ModuleImageContainsNul => {
                 CudaRuntimeStatus::unavailable(CUDA_MODULE_IMAGE_CONTAINS_NUL_REASON, None)
@@ -412,6 +581,21 @@ impl std::fmt::Display for CudaRuntimeError {
             }
             Self::StreamSynchronizeFailed(code) => {
                 write!(f, "{CUDA_STREAM_SYNCHRONIZE_FAILED_REASON}: {code}")
+            }
+            Self::EventCreateFailed(code) => {
+                write!(f, "{CUDA_EVENT_CREATE_FAILED_REASON}: {code}")
+            }
+            Self::EventDestroyFailed(code) => {
+                write!(f, "{CUDA_EVENT_DESTROY_FAILED_REASON}: {code}")
+            }
+            Self::EventRecordFailed(code) => {
+                write!(f, "{CUDA_EVENT_RECORD_FAILED_REASON}: {code}")
+            }
+            Self::EventSynchronizeFailed(code) => {
+                write!(f, "{CUDA_EVENT_SYNCHRONIZE_FAILED_REASON}: {code}")
+            }
+            Self::EventElapsedTimeFailed(code) => {
+                write!(f, "{CUDA_EVENT_ELAPSED_TIME_FAILED_REASON}: {code}")
             }
             Self::ModuleImageContainsNul => write!(f, "{CUDA_MODULE_IMAGE_CONTAINS_NUL_REASON}"),
             Self::ModuleLoadFailed(code) => write!(f, "{CUDA_MODULE_LOAD_FAILED_REASON}: {code}"),
@@ -526,6 +710,11 @@ impl CudaRuntime {
         CudaStream::create(self)
     }
 
+    #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+    fn create_event(&self) -> Result<CudaEvent<'_>, CudaRuntimeError> {
+        CudaEvent::create(self)
+    }
+
     pub fn allocate_device_buffer<T: CudaDeviceElement>(
         &self,
         len: usize,
@@ -613,6 +802,74 @@ impl Drop for CudaStream<'_> {
         {
             if let Some(handle) = self.handle.take() {
                 let _ = runtime_impl::destroy_stream(self._runtime, handle);
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+#[derive(Debug)]
+struct CudaEvent<'runtime> {
+    runtime: &'runtime CudaRuntime,
+    handle: Option<runtime_impl::CudaEventHandle>,
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+impl<'runtime> CudaEvent<'runtime> {
+    fn create(runtime: &'runtime CudaRuntime) -> Result<Self, CudaRuntimeError> {
+        Ok(Self {
+            runtime,
+            handle: Some(runtime_impl::create_event(runtime)?),
+        })
+    }
+
+    fn record(&self, stream: &CudaStream<'runtime>) -> Result<(), CudaRuntimeError> {
+        let event_handle = self.handle.ok_or(CudaRuntimeError::EventRecordFailed(-1))?;
+        let stream_handle = stream
+            .handle
+            .ok_or(CudaRuntimeError::EventRecordFailed(-1))?;
+        runtime_impl::record_event(self.runtime, event_handle, stream_handle)
+    }
+
+    fn synchronize(&self) -> Result<(), CudaRuntimeError> {
+        if let Some(handle) = self.handle {
+            runtime_impl::synchronize_event(self.runtime, handle)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn elapsed_since(&self, start: &Self) -> Result<std::time::Duration, CudaRuntimeError> {
+        let start_handle = start
+            .handle
+            .ok_or(CudaRuntimeError::EventElapsedTimeFailed(-1))?;
+        let end_handle = self
+            .handle
+            .ok_or(CudaRuntimeError::EventElapsedTimeFailed(-1))?;
+        let elapsed_ms =
+            runtime_impl::elapsed_event_time_ms(self.runtime, start_handle, end_handle)?;
+        Ok(std::time::Duration::from_secs_f64(
+            f64::from(elapsed_ms) / 1000.0,
+        ))
+    }
+
+    fn destroy(self) -> Result<(), CudaRuntimeError> {
+        let mut event = self;
+        if let Some(handle) = event.handle {
+            runtime_impl::destroy_event(event.runtime, handle)?;
+            event.handle = None;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+impl Drop for CudaEvent<'_> {
+    fn drop(&mut self) {
+        #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+        {
+            if let Some(handle) = self.handle.take() {
+                let _ = runtime_impl::destroy_event(self.runtime, handle);
             }
         }
     }
@@ -988,9 +1245,7 @@ pub struct RouteAgentsKernelArgs<'buffers, 'runtime> {
     agent_vectors: &'buffers CudaDeviceBuffer<'runtime, f32>,
     agent_ids: &'buffers CudaDeviceBuffer<'runtime, u32>,
     request_vectors: &'buffers CudaDeviceBuffer<'runtime, f32>,
-    queue_depth_norm: &'buffers CudaDeviceBuffer<'runtime, f32>,
-    latency_norm: &'buffers CudaDeviceBuffer<'runtime, f32>,
-    cache_pressure_norm: &'buffers CudaDeviceBuffer<'runtime, f32>,
+    agent_score_weights: &'buffers CudaDeviceBuffer<'runtime, f32>,
     availability: &'buffers CudaDeviceBuffer<'runtime, u32>,
     output_agent_ids: &'buffers mut CudaDeviceBuffer<'runtime, u32>,
     output_effective_distances: &'buffers mut CudaDeviceBuffer<'runtime, f32>,
@@ -999,19 +1254,15 @@ pub struct RouteAgentsKernelArgs<'buffers, 'runtime> {
     agent_count: u32,
     request_count: u32,
     dimensions: u32,
-    coefficients: ScoreCoefficients,
 }
 
 impl<'buffers, 'runtime> RouteAgentsKernelArgs<'buffers, 'runtime> {
     pub fn new(
         plan: CudaBufferPlan,
-        coefficients: ScoreCoefficients,
         agent_vectors: &'buffers CudaDeviceBuffer<'runtime, f32>,
         agent_ids: &'buffers CudaDeviceBuffer<'runtime, u32>,
         request_vectors: &'buffers CudaDeviceBuffer<'runtime, f32>,
-        queue_depth_norm: &'buffers CudaDeviceBuffer<'runtime, f32>,
-        latency_norm: &'buffers CudaDeviceBuffer<'runtime, f32>,
-        cache_pressure_norm: &'buffers CudaDeviceBuffer<'runtime, f32>,
+        agent_score_weights: &'buffers CudaDeviceBuffer<'runtime, f32>,
         availability: &'buffers CudaDeviceBuffer<'runtime, u32>,
         output_agent_ids: &'buffers mut CudaDeviceBuffer<'runtime, u32>,
         output_effective_distances: &'buffers mut CudaDeviceBuffer<'runtime, f32>,
@@ -1036,15 +1287,9 @@ impl<'buffers, 'runtime> RouteAgentsKernelArgs<'buffers, 'runtime> {
             plan.request_vector_f32_len,
         )?;
         validate_buffer_len(
-            "queue_depth_norm",
-            queue_depth_norm.len(),
-            plan.queue_f32_len,
-        )?;
-        validate_buffer_len("latency_norm", latency_norm.len(), plan.latency_f32_len)?;
-        validate_buffer_len(
-            "cache_pressure_norm",
-            cache_pressure_norm.len(),
-            plan.cache_f32_len,
+            "agent_score_weights",
+            agent_score_weights.len(),
+            plan.agent_score_weight_f32_len,
         )?;
         validate_buffer_len(
             "availability",
@@ -1072,9 +1317,7 @@ impl<'buffers, 'runtime> RouteAgentsKernelArgs<'buffers, 'runtime> {
             agent_vectors,
             agent_ids,
             request_vectors,
-            queue_depth_norm,
-            latency_norm,
-            cache_pressure_norm,
+            agent_score_weights,
             availability,
             output_agent_ids,
             output_effective_distances,
@@ -1083,7 +1326,6 @@ impl<'buffers, 'runtime> RouteAgentsKernelArgs<'buffers, 'runtime> {
             agent_count: checked_u32(plan.agent_count, CUDA_ROUTE_AGENTS_LAUNCH_CONTEXT)?,
             request_count: checked_u32(plan.request_count, CUDA_ROUTE_AGENTS_LAUNCH_CONTEXT)?,
             dimensions: checked_u32(plan.dimensions, CUDA_ROUTE_AGENTS_LAUNCH_CONTEXT)?,
-            coefficients,
         })
     }
 
@@ -1109,9 +1351,7 @@ impl<'buffers, 'runtime> RouteAgentsKernelArgs<'buffers, 'runtime> {
             agent_vectors: self.agent_vectors.launch_ptr(),
             agent_ids: self.agent_ids.launch_ptr(),
             request_vectors: self.request_vectors.launch_ptr(),
-            queue_depth_norm: self.queue_depth_norm.launch_ptr(),
-            latency_norm: self.latency_norm.launch_ptr(),
-            cache_pressure_norm: self.cache_pressure_norm.launch_ptr(),
+            agent_score_weights: self.agent_score_weights.launch_ptr(),
             availability: self.availability.launch_ptr(),
             output_agent_ids: self.output_agent_ids.launch_ptr(),
             output_effective_distances: self.output_effective_distances.launch_ptr(),
@@ -1120,9 +1360,6 @@ impl<'buffers, 'runtime> RouteAgentsKernelArgs<'buffers, 'runtime> {
             agent_count: self.agent_count,
             request_count: self.request_count,
             dimensions: self.dimensions,
-            alpha_queue: self.coefficients.alpha_queue,
-            beta_latency: self.coefficients.beta_latency,
-            gamma_cache: self.coefficients.gamma_cache,
         }
     }
 }
@@ -1133,9 +1370,7 @@ struct RouteAgentsKernelParameterPack {
     agent_vectors: runtime_impl::CudaDevicePtr,
     agent_ids: runtime_impl::CudaDevicePtr,
     request_vectors: runtime_impl::CudaDevicePtr,
-    queue_depth_norm: runtime_impl::CudaDevicePtr,
-    latency_norm: runtime_impl::CudaDevicePtr,
-    cache_pressure_norm: runtime_impl::CudaDevicePtr,
+    agent_score_weights: runtime_impl::CudaDevicePtr,
     availability: runtime_impl::CudaDevicePtr,
     output_agent_ids: runtime_impl::CudaDevicePtr,
     output_effective_distances: runtime_impl::CudaDevicePtr,
@@ -1144,21 +1379,16 @@ struct RouteAgentsKernelParameterPack {
     agent_count: u32,
     request_count: u32,
     dimensions: u32,
-    alpha_queue: f32,
-    beta_latency: f32,
-    gamma_cache: f32,
 }
 
 #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
 impl RouteAgentsKernelParameterPack {
-    fn kernel_params(&mut self) -> [*mut c_void; 17] {
+    fn kernel_params(&mut self) -> [*mut c_void; 12] {
         [
             kernel_param(&mut self.agent_vectors),
             kernel_param(&mut self.agent_ids),
             kernel_param(&mut self.request_vectors),
-            kernel_param(&mut self.queue_depth_norm),
-            kernel_param(&mut self.latency_norm),
-            kernel_param(&mut self.cache_pressure_norm),
+            kernel_param(&mut self.agent_score_weights),
             kernel_param(&mut self.availability),
             kernel_param(&mut self.output_agent_ids),
             kernel_param(&mut self.output_effective_distances),
@@ -1167,9 +1397,6 @@ impl RouteAgentsKernelParameterPack {
             kernel_param(&mut self.agent_count),
             kernel_param(&mut self.request_count),
             kernel_param(&mut self.dimensions),
-            kernel_param(&mut self.alpha_queue),
-            kernel_param(&mut self.beta_latency),
-            kernel_param(&mut self.gamma_cache),
         ]
     }
 }
@@ -1223,6 +1450,36 @@ fn execute_route_agents_k1_timed(
     requests: &[RoutingRequest],
     states: &[AgentRuntimeState],
 ) -> Result<CudaTimedRoutingResult, CudaRouteExecutionError> {
+    let module_load_start = std::time::Instant::now();
+    let module = runtime.load_route_agents_module()?;
+    let module_load = module_load_start.elapsed();
+    let mut timed = execute_route_agents_k1_timed_with_loaded_module(
+        runtime,
+        &module,
+        route_table,
+        coefficients,
+        requests,
+        states,
+    )?;
+    timed.timing.module_stream_setup += module_load;
+
+    let module_unload_start = std::time::Instant::now();
+    module.unload()?;
+    timed.timing.module_stream_setup += module_unload_start.elapsed();
+
+    Ok(timed)
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+#[allow(dead_code)]
+fn execute_route_agents_k1_timed_with_loaded_module(
+    runtime: &CudaRuntime,
+    module: &CudaModule<'_>,
+    route_table: &AgentRouteTable,
+    coefficients: ScoreCoefficients,
+    requests: &[RoutingRequest],
+    states: &[AgentRuntimeState],
+) -> Result<CudaTimedRoutingResult, CudaRouteExecutionError> {
     let total_start = std::time::Instant::now();
     let mut timing = CudaRouteTimingBreakdown::default();
 
@@ -1235,70 +1492,141 @@ fn execute_route_agents_k1_timed(
         route_table.dimensions(),
         1,
     )?;
-    let inputs = CudaRouteHostInputs::from_requests_and_states(requests, states);
+    let inputs = CudaRouteHostInputs::from_requests_and_states(requests, states, coefficients);
     timing.host_prepare = host_prepare_start.elapsed();
 
     let device_allocate_start = std::time::Instant::now();
-    let mut agent_vectors = runtime.allocate_device_buffer::<f32>(plan.agent_vector_f32_len)?;
-    let mut agent_ids = runtime.allocate_device_buffer::<u32>(plan.agent_id_u32_len)?;
-    let mut request_vectors = runtime.allocate_device_buffer::<f32>(plan.request_vector_f32_len)?;
-    let mut queue_depth_norm = runtime.allocate_device_buffer::<f32>(plan.queue_f32_len)?;
-    let mut latency_norm = runtime.allocate_device_buffer::<f32>(plan.latency_f32_len)?;
-    let mut cache_pressure_norm = runtime.allocate_device_buffer::<f32>(plan.cache_f32_len)?;
-    let mut availability = runtime.allocate_device_buffer::<u32>(plan.availability_u32_len)?;
-    let mut output_agent_ids =
-        runtime.allocate_device_buffer::<u32>(plan.output_candidate_u32_len)?;
-    let mut output_effective_distances =
-        runtime.allocate_device_buffer::<f32>(plan.output_effective_f32_len)?;
-    let mut output_base_distances =
-        runtime.allocate_device_buffer::<f32>(plan.output_base_f32_len)?;
-    let mut output_flags = runtime.allocate_device_buffer::<u32>(plan.output_flag_u32_len)?;
+    let mut workspace = CudaRouteK1Workspace::new(runtime, plan)?;
     timing.device_allocate = device_allocate_start.elapsed();
 
+    execute_route_agents_k1_timed_with_prepared_workspace(
+        runtime,
+        module,
+        &mut workspace,
+        route_table,
+        coefficients,
+        requests,
+        states,
+        &inputs,
+        timing,
+        total_start,
+    )
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+#[allow(dead_code)]
+fn execute_route_agents_k1_timed_with_workspace<'runtime>(
+    runtime: &'runtime CudaRuntime,
+    module: &CudaModule<'runtime>,
+    workspace: &mut CudaRouteK1Workspace<'runtime>,
+    route_table: &AgentRouteTable,
+    coefficients: ScoreCoefficients,
+    requests: &[RoutingRequest],
+    states: &[AgentRuntimeState],
+) -> Result<CudaTimedRoutingResult, CudaRouteExecutionError> {
+    let total_start = std::time::Instant::now();
+    let mut timing = CudaRouteTimingBreakdown::default();
+
+    validate_k_one_inputs(route_table, requests, states)?;
+
+    let host_prepare_start = std::time::Instant::now();
+    let plan = CudaBufferPlan::try_new(
+        route_table.len(),
+        requests.len(),
+        route_table.dimensions(),
+        1,
+    )?;
+    if workspace.plan != plan {
+        return Err(CudaRuntimeError::InvalidLaunchConfig("workspace plan mismatch").into());
+    }
+    let inputs = CudaRouteHostInputs::from_requests_and_states(requests, states, coefficients);
+    timing.host_prepare = host_prepare_start.elapsed();
+
+    execute_route_agents_k1_timed_with_prepared_workspace(
+        runtime,
+        module,
+        workspace,
+        route_table,
+        coefficients,
+        requests,
+        states,
+        &inputs,
+        timing,
+        total_start,
+    )
+}
+
+#[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+#[allow(clippy::too_many_arguments)]
+fn execute_route_agents_k1_timed_with_prepared_workspace<'runtime>(
+    runtime: &'runtime CudaRuntime,
+    module: &CudaModule<'runtime>,
+    workspace: &mut CudaRouteK1Workspace<'runtime>,
+    route_table: &AgentRouteTable,
+    coefficients: ScoreCoefficients,
+    requests: &[RoutingRequest],
+    states: &[AgentRuntimeState],
+    inputs: &CudaRouteHostInputs,
+    mut timing: CudaRouteTimingBreakdown,
+    total_start: std::time::Instant,
+) -> Result<CudaTimedRoutingResult, CudaRouteExecutionError> {
+    let plan = workspace.plan;
+
     let host_to_device_start = std::time::Instant::now();
-    agent_vectors.copy_from(route_table.packed_vectors())?;
-    agent_ids.copy_from(route_table.agent_ids())?;
-    request_vectors.copy_from(&inputs.request_vectors)?;
-    queue_depth_norm.copy_from(&inputs.queue_depth_norm)?;
-    latency_norm.copy_from(&inputs.latency_norm)?;
-    cache_pressure_norm.copy_from(&inputs.cache_pressure_norm)?;
-    availability.copy_from(&inputs.availability)?;
+    workspace
+        .agent_vectors
+        .copy_from(route_table.packed_vectors())?;
+    workspace.agent_ids.copy_from(route_table.agent_ids())?;
+    workspace
+        .request_vectors
+        .copy_from(&inputs.request_vectors)?;
+    workspace
+        .agent_score_weights
+        .copy_from(&inputs.agent_score_weights)?;
+    workspace.availability.copy_from(&inputs.availability)?;
     timing.host_to_device = host_to_device_start.elapsed();
 
     let module_stream_setup_start = std::time::Instant::now();
-    let module = runtime.load_route_agents_module()?;
     let stream = runtime.create_stream()?;
+    let kernel_start_event = runtime.create_event()?;
+    let kernel_stop_event = runtime.create_event()?;
     let kernel = module.route_agents_kernel()?;
     timing.module_stream_setup = module_stream_setup_start.elapsed();
     {
         let mut args = RouteAgentsKernelArgs::new(
             plan,
-            coefficients,
-            &agent_vectors,
-            &agent_ids,
-            &request_vectors,
-            &queue_depth_norm,
-            &latency_norm,
-            &cache_pressure_norm,
-            &availability,
-            &mut output_agent_ids,
-            &mut output_effective_distances,
-            &mut output_base_distances,
-            &mut output_flags,
+            &workspace.agent_vectors,
+            &workspace.agent_ids,
+            &workspace.request_vectors,
+            &workspace.agent_score_weights,
+            &workspace.availability,
+            &mut workspace.output_agent_ids,
+            &mut workspace.output_effective_distances,
+            &mut workspace.output_base_distances,
+            &mut workspace.output_flags,
         )?;
         let kernel_launch_sync_start = std::time::Instant::now();
-        kernel.launch_and_synchronize(&stream, &mut args)?;
+        kernel_start_event.record(&stream)?;
+        kernel.launch(&stream, &mut args)?;
+        kernel_stop_event.record(&stream)?;
+        kernel_stop_event.synchronize()?;
+        timing.kernel_device = kernel_stop_event.elapsed_since(&kernel_start_event)?;
         timing.kernel_launch_sync = kernel_launch_sync_start.elapsed();
     }
+    kernel_stop_event.destroy()?;
+    kernel_start_event.destroy()?;
     stream.destroy()?;
-    module.unload()?;
 
     let device_to_host_start = std::time::Instant::now();
     let mut output = CudaRouteKernelOutput::new(plan);
-    output_agent_ids.copy_to(&mut output.agent_ids)?;
-    output_effective_distances.copy_to(&mut output.effective_distances)?;
-    output_base_distances.copy_to(&mut output.base_distances)?;
-    output_flags.copy_to(&mut output.flags)?;
+    workspace.output_agent_ids.copy_to(&mut output.agent_ids)?;
+    workspace
+        .output_effective_distances
+        .copy_to(&mut output.effective_distances)?;
+    workspace
+        .output_base_distances
+        .copy_to(&mut output.base_distances)?;
+    workspace.output_flags.copy_to(&mut output.flags)?;
     timing.device_to_host = device_to_host_start.elapsed();
 
     let decode_start = std::time::Instant::now();
@@ -1350,26 +1678,30 @@ fn validate_k_one_inputs(
 #[allow(dead_code)]
 struct CudaRouteHostInputs {
     request_vectors: Vec<f32>,
-    queue_depth_norm: Vec<f32>,
-    latency_norm: Vec<f32>,
-    cache_pressure_norm: Vec<f32>,
+    agent_score_weights: Vec<f32>,
     availability: Vec<u32>,
 }
 
 #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
 impl CudaRouteHostInputs {
     #[allow(dead_code)]
-    fn from_requests_and_states(requests: &[RoutingRequest], states: &[AgentRuntimeState]) -> Self {
+    fn from_requests_and_states(
+        requests: &[RoutingRequest],
+        states: &[AgentRuntimeState],
+        coefficients: ScoreCoefficients,
+    ) -> Self {
         Self {
             request_vectors: requests
                 .iter()
                 .flat_map(|request| request.vector.iter().copied())
                 .collect(),
-            queue_depth_norm: states.iter().map(|state| state.queue_depth_norm).collect(),
-            latency_norm: states.iter().map(|state| state.latency_norm).collect(),
-            cache_pressure_norm: states
+            agent_score_weights: states
                 .iter()
-                .map(|state| state.cache_pressure_norm)
+                .map(|state| {
+                    1.0 + coefficients.alpha_queue * state.queue_depth_norm
+                        + coefficients.beta_latency * state.latency_norm
+                        + coefficients.gamma_cache * state.cache_pressure_norm
+                })
                 .collect(),
             availability: states.iter().map(|state| state.availability).collect(),
         }
@@ -1408,6 +1740,14 @@ fn decode_k_one_results(
     states: &[AgentRuntimeState],
     output: &CudaRouteKernelOutput,
 ) -> Vec<RoutingResult> {
+    let agent_index_by_id = route_table
+        .agent_ids()
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, agent_id)| (agent_id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+
     requests
         .iter()
         .enumerate()
@@ -1415,10 +1755,8 @@ fn decode_k_one_results(
             let agent_id = output.agent_ids[idx];
             let mut available_candidates = Vec::with_capacity(2);
             if agent_id != 0 {
-                let agent_index = route_table
-                    .agent_ids()
-                    .iter()
-                    .position(|candidate_id| *candidate_id == agent_id)
+                let agent_index = *agent_index_by_id
+                    .get(&agent_id)
                     .expect("CUDA output agent id should exist in route table");
                 available_candidates.push(decode_candidate(
                     agent_id,
@@ -1539,6 +1877,7 @@ mod runtime_impl {
     type CudaDriverResult = c_int;
     pub(super) type CudaDevicePtr = u64;
     pub(super) type CudaStreamHandle = NonNull<c_void>;
+    pub(super) type CudaEventHandle = NonNull<c_void>;
     pub(super) type CudaModuleHandle = NonNull<c_void>;
     pub(super) type CudaFunctionHandle = NonNull<c_void>;
 
@@ -1612,6 +1951,33 @@ mod runtime_impl {
     type CuStreamSynchronizeFn = unsafe extern "system" fn(*mut c_void) -> CudaDriverResult;
     #[cfg(target_os = "linux")]
     type CuStreamSynchronizeFn = unsafe extern "C" fn(*mut c_void) -> CudaDriverResult;
+
+    #[cfg(windows)]
+    type CuEventCreateFn = unsafe extern "system" fn(*mut *mut c_void, c_uint) -> CudaDriverResult;
+    #[cfg(target_os = "linux")]
+    type CuEventCreateFn = unsafe extern "C" fn(*mut *mut c_void, c_uint) -> CudaDriverResult;
+
+    #[cfg(windows)]
+    type CuEventDestroyFn = unsafe extern "system" fn(*mut c_void) -> CudaDriverResult;
+    #[cfg(target_os = "linux")]
+    type CuEventDestroyFn = unsafe extern "C" fn(*mut c_void) -> CudaDriverResult;
+
+    #[cfg(windows)]
+    type CuEventRecordFn = unsafe extern "system" fn(*mut c_void, *mut c_void) -> CudaDriverResult;
+    #[cfg(target_os = "linux")]
+    type CuEventRecordFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> CudaDriverResult;
+
+    #[cfg(windows)]
+    type CuEventSynchronizeFn = unsafe extern "system" fn(*mut c_void) -> CudaDriverResult;
+    #[cfg(target_os = "linux")]
+    type CuEventSynchronizeFn = unsafe extern "C" fn(*mut c_void) -> CudaDriverResult;
+
+    #[cfg(windows)]
+    type CuEventElapsedTimeFn =
+        unsafe extern "system" fn(*mut f32, *mut c_void, *mut c_void) -> CudaDriverResult;
+    #[cfg(target_os = "linux")]
+    type CuEventElapsedTimeFn =
+        unsafe extern "C" fn(*mut f32, *mut c_void, *mut c_void) -> CudaDriverResult;
 
     #[cfg(windows)]
     type CuModuleLoadDataFn =
@@ -1787,6 +2153,11 @@ mod runtime_impl {
         cu_stream_create: CuStreamCreateFn,
         cu_stream_destroy: CuStreamDestroyFn,
         cu_stream_synchronize: CuStreamSynchronizeFn,
+        cu_event_create: CuEventCreateFn,
+        cu_event_destroy: CuEventDestroyFn,
+        cu_event_record: CuEventRecordFn,
+        cu_event_synchronize: CuEventSynchronizeFn,
+        cu_event_elapsed_time: CuEventElapsedTimeFn,
         cu_module_load_data: CuModuleLoadDataFn,
         cu_module_unload: CuModuleUnloadFn,
         cu_module_get_function: CuModuleGetFunctionFn,
@@ -1852,6 +2223,19 @@ mod runtime_impl {
             )?;
             let cu_stream_synchronize_ptr =
                 library.symbol_ptr(b"cuStreamSynchronize\0", "cuStreamSynchronize")?;
+            let cu_event_create_ptr = library.symbol_ptr(b"cuEventCreate\0", "cuEventCreate")?;
+            let cu_event_destroy_ptr = library.symbol_ptr_any(
+                &[
+                    (b"cuEventDestroy_v2\0", "cuEventDestroy_v2"),
+                    (b"cuEventDestroy\0", "cuEventDestroy"),
+                ],
+                "cuEventDestroy",
+            )?;
+            let cu_event_record_ptr = library.symbol_ptr(b"cuEventRecord\0", "cuEventRecord")?;
+            let cu_event_synchronize_ptr =
+                library.symbol_ptr(b"cuEventSynchronize\0", "cuEventSynchronize")?;
+            let cu_event_elapsed_time_ptr =
+                library.symbol_ptr(b"cuEventElapsedTime\0", "cuEventElapsedTime")?;
             let cu_module_load_data_ptr =
                 library.symbol_ptr(b"cuModuleLoadData\0", "cuModuleLoadData")?;
             let cu_module_unload_ptr = library.symbol_ptr(b"cuModuleUnload\0", "cuModuleUnload")?;
@@ -1909,6 +2293,24 @@ mod runtime_impl {
             let cu_stream_synchronize = unsafe {
                 std::mem::transmute::<*mut c_void, CuStreamSynchronizeFn>(cu_stream_synchronize_ptr)
             };
+            // SAFETY: Same invariant as `cu_init`; this symbol name maps to `cuEventCreate`.
+            let cu_event_create =
+                unsafe { std::mem::transmute::<*mut c_void, CuEventCreateFn>(cu_event_create_ptr) };
+            // SAFETY: Same invariant as `cu_init`; this symbol name maps to `cuEventDestroy`.
+            let cu_event_destroy = unsafe {
+                std::mem::transmute::<*mut c_void, CuEventDestroyFn>(cu_event_destroy_ptr)
+            };
+            // SAFETY: Same invariant as `cu_init`; this symbol name maps to `cuEventRecord`.
+            let cu_event_record =
+                unsafe { std::mem::transmute::<*mut c_void, CuEventRecordFn>(cu_event_record_ptr) };
+            // SAFETY: Same invariant as `cu_init`; this symbol maps to `cuEventSynchronize`.
+            let cu_event_synchronize = unsafe {
+                std::mem::transmute::<*mut c_void, CuEventSynchronizeFn>(cu_event_synchronize_ptr)
+            };
+            // SAFETY: Same invariant as `cu_init`; this symbol maps to `cuEventElapsedTime`.
+            let cu_event_elapsed_time = unsafe {
+                std::mem::transmute::<*mut c_void, CuEventElapsedTimeFn>(cu_event_elapsed_time_ptr)
+            };
             // SAFETY: Same invariant as `cu_init`; this symbol name maps to `cuModuleLoadData`.
             let cu_module_load_data = unsafe {
                 std::mem::transmute::<*mut c_void, CuModuleLoadDataFn>(cu_module_load_data_ptr)
@@ -1943,6 +2345,11 @@ mod runtime_impl {
                 cu_stream_create,
                 cu_stream_destroy,
                 cu_stream_synchronize,
+                cu_event_create,
+                cu_event_destroy,
+                cu_event_record,
+                cu_event_synchronize,
+                cu_event_elapsed_time,
                 cu_module_load_data,
                 cu_module_unload,
                 cu_module_get_function,
@@ -2143,6 +2550,93 @@ mod runtime_impl {
         }
     }
 
+    pub(super) fn create_event(runtime: &CudaRuntime) -> Result<CudaEventHandle, CudaRuntimeError> {
+        set_current_context(runtime)?;
+
+        let mut event = std::ptr::null_mut();
+        // SAFETY: A current CUDA context is active and `event` is a valid out-pointer.
+        let result = unsafe { (runtime.driver.symbols.cu_event_create)(&mut event, 0) };
+        if result != 0 {
+            return Err(CudaRuntimeError::EventCreateFailed(result));
+        }
+
+        NonNull::new(event).ok_or(CudaRuntimeError::EventCreateFailed(-1))
+    }
+
+    pub(super) fn record_event(
+        runtime: &CudaRuntime,
+        event: CudaEventHandle,
+        stream: CudaStreamHandle,
+    ) -> Result<(), CudaRuntimeError> {
+        set_current_context(runtime)?;
+
+        // SAFETY: `event` and `stream` were created for this runtime context and remain owned by
+        // safe wrappers for the duration of this call.
+        let result =
+            unsafe { (runtime.driver.symbols.cu_event_record)(event.as_ptr(), stream.as_ptr()) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(CudaRuntimeError::EventRecordFailed(result))
+        }
+    }
+
+    pub(super) fn synchronize_event(
+        runtime: &CudaRuntime,
+        event: CudaEventHandle,
+    ) -> Result<(), CudaRuntimeError> {
+        set_current_context(runtime)?;
+
+        // SAFETY: `event` was created by `cuEventCreate` for this runtime context and remains
+        // owned by `CudaEvent`.
+        let result = unsafe { (runtime.driver.symbols.cu_event_synchronize)(event.as_ptr()) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(CudaRuntimeError::EventSynchronizeFailed(result))
+        }
+    }
+
+    pub(super) fn elapsed_event_time_ms(
+        runtime: &CudaRuntime,
+        start: CudaEventHandle,
+        end: CudaEventHandle,
+    ) -> Result<f32, CudaRuntimeError> {
+        set_current_context(runtime)?;
+
+        let mut elapsed_ms = 0.0_f32;
+        // SAFETY: Both events were recorded in this context and `elapsed_ms` is a valid
+        // out-pointer for CUDA to write the elapsed milliseconds.
+        let result = unsafe {
+            (runtime.driver.symbols.cu_event_elapsed_time)(
+                &mut elapsed_ms,
+                start.as_ptr(),
+                end.as_ptr(),
+            )
+        };
+        if result == 0 {
+            Ok(elapsed_ms)
+        } else {
+            Err(CudaRuntimeError::EventElapsedTimeFailed(result))
+        }
+    }
+
+    pub(super) fn destroy_event(
+        runtime: &CudaRuntime,
+        event: CudaEventHandle,
+    ) -> Result<(), CudaRuntimeError> {
+        set_current_context(runtime)?;
+
+        // SAFETY: `event` was created by `cuEventCreate` for this runtime context and is
+        // destroyed at most once by `CudaEvent`.
+        let result = unsafe { (runtime.driver.symbols.cu_event_destroy)(event.as_ptr()) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(CudaRuntimeError::EventDestroyFailed(result))
+        }
+    }
+
     pub(super) fn load_module_from_image(
         runtime: &CudaRuntime,
         module_image: &CStr,
@@ -2325,9 +2819,7 @@ pub struct CudaBufferPlan {
     pub agent_id_u32_len: usize,
     pub agent_vector_f32_len: usize,
     pub request_vector_f32_len: usize,
-    pub queue_f32_len: usize,
-    pub latency_f32_len: usize,
-    pub cache_f32_len: usize,
+    pub agent_score_weight_f32_len: usize,
     pub availability_u32_len: usize,
     pub output_candidate_u32_len: usize,
     pub output_effective_f32_len: usize,
@@ -2354,9 +2846,7 @@ impl CudaBufferPlan {
             agent_id_u32_len: agent_count,
             agent_vector_f32_len,
             request_vector_f32_len,
-            queue_f32_len: agent_count,
-            latency_f32_len: agent_count,
-            cache_f32_len: agent_count,
+            agent_score_weight_f32_len: agent_count,
             availability_u32_len: agent_count,
             output_candidate_u32_len: candidate_slots,
             output_effective_f32_len: candidate_slots,
@@ -2384,9 +2874,7 @@ impl CudaBufferPlan {
         checked_sum(&[
             self.agent_vector_f32_len,
             self.request_vector_f32_len,
-            self.queue_f32_len,
-            self.latency_f32_len,
-            self.cache_f32_len,
+            self.agent_score_weight_f32_len,
             self.output_effective_f32_len,
             self.output_base_f32_len,
         ])
@@ -2462,8 +2950,9 @@ mod tests {
     #[test]
     fn route_agents_kernel_artifact_is_embedded() {
         assert!(ROUTE_AGENTS_K1_PTX.contains(".entry qtom_route_agents_k1"));
-        assert!(ROUTE_AGENTS_K1_PTX.contains(".param .u32 qtom_param_request_count"));
-        assert!(ROUTE_AGENTS_K1_PTX.contains(".param .f32 qtom_param_alpha_queue"));
+        assert_eq!(ROUTE_AGENTS_K1_PTX.matches(".param .u64").count(), 9);
+        assert_eq!(ROUTE_AGENTS_K1_PTX.matches(".param .u32").count(), 3);
+        assert_eq!(ROUTE_AGENTS_K1_PTX.matches(".param .f32").count(), 0);
     }
 
     #[test]
@@ -2496,6 +2985,19 @@ mod tests {
         };
 
         let stream = runtime.create_stream().unwrap();
+        #[cfg(all(feature = "cuda-runtime", any(windows, target_os = "linux")))]
+        {
+            let start_event = runtime.create_event().unwrap();
+            let stop_event = runtime.create_event().unwrap();
+            start_event.record(&stream).unwrap();
+            stop_event.record(&stream).unwrap();
+            stop_event.synchronize().unwrap();
+            assert!(
+                stop_event.elapsed_since(&start_event).unwrap() < std::time::Duration::from_secs(1)
+            );
+            stop_event.destroy().unwrap();
+            start_event.destroy().unwrap();
+        }
         stream.synchronize().unwrap();
         stream.destroy().unwrap();
 
@@ -2537,9 +3039,7 @@ mod tests {
         let agent_vectors = runtime.allocate_device_buffer::<f32>(0).unwrap();
         let agent_ids = runtime.allocate_device_buffer::<u32>(0).unwrap();
         let request_vectors = runtime.allocate_device_buffer::<f32>(0).unwrap();
-        let queue_depth_norm = runtime.allocate_device_buffer::<f32>(0).unwrap();
-        let latency_norm = runtime.allocate_device_buffer::<f32>(0).unwrap();
-        let cache_pressure_norm = runtime.allocate_device_buffer::<f32>(0).unwrap();
+        let agent_score_weights = runtime.allocate_device_buffer::<f32>(0).unwrap();
         let availability = runtime.allocate_device_buffer::<u32>(0).unwrap();
         let mut output_agent_ids = runtime.allocate_device_buffer::<u32>(0).unwrap();
         let mut output_effective_distances = runtime.allocate_device_buffer::<f32>(0).unwrap();
@@ -2554,13 +3054,10 @@ mod tests {
 
             let mut args = RouteAgentsKernelArgs::new(
                 plan,
-                ScoreCoefficients::default(),
                 &agent_vectors,
                 &agent_ids,
                 &request_vectors,
-                &queue_depth_norm,
-                &latency_norm,
-                &cache_pressure_norm,
+                &agent_score_weights,
                 &availability,
                 &mut output_agent_ids,
                 &mut output_effective_distances,

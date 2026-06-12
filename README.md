@@ -74,7 +74,7 @@ Use `--cuda-plan` to read a golden fixture through the CUDA scaffold and print t
 
 Use `--write-cuda-golden` to export the default `8192 agents / 2048 tasks / 16 dims / k=1` deterministic CUDA parity fixture. Use `--cuda-parity` with `--features qtom-cuda/cuda-runtime` to compare CPU routing against public `CudaRouter::route_batch` over that fixture. CUDA parity requires identical route decisions and allows only a small absolute tolerance on floating score fields.
 
-Use `--cuda-timing` with `--features qtom-cuda/cuda-runtime` to time whole public `route_batch` calls over the CUDA `k=1` golden fixture after first checking CPU/CUDA parity. This measures the current integration boundary and prints a CUDA stage breakdown for runtime init, host preparation, allocation, host/device copies, module/stream setup, kernel launch/sync, and decode.
+Use `--cuda-timing` with `--features qtom-cuda/cuda-runtime` to time whole public `route_batch` calls over the CUDA `k=1` golden fixture after first checking CPU/CUDA parity. This measures the current integration boundary and prints a CUDA stage breakdown for runtime init, host preparation, allocation, host/device copies, module/stream setup, host launch/sync wall time, CUDA event device time, inferred host overhead, and decode.
 
 Use `cargo test -p qtom-cuda --features cuda-runtime` to opt into CUDA Driver API availability detection and resource-wrapper smoke tests. It verifies that the NVIDIA driver runtime can be loaded, queried, used for tiny stream/device-buffer lifecycles, used to load the route-kernel module, used for typed host/device copies, and used for decoded `k = 1` CPU parity through both the internal helper and public `CudaRouter::route_batch`. See `docs/cuda-toolchain.md`.
 
@@ -115,4 +115,4 @@ cargo test --workspace
 
 ## Notes
 
-This is an early prototype. The next major milestone is reusing CUDA runtime/module resources across `k = 1` batches before attempting kernel-level optimization.
+This is an early prototype. CUDA event timing now shows launch/sync overhead is small for the reusable `k = 1` path; the next major milestone is reducing repeated full-agent-scan work in the kernel while preserving exact CPU/golden-fixture route parity.
