@@ -17,7 +17,7 @@ The current implementation is the Phase 0/1 truth source:
 - geometric substitute-quality metrics
 - benchmark runners for latency, scan overhead, memory layout, and batch throughput
 
-CUDA is intentionally not implemented yet. The CPU route is the correctness oracle for the future RTX 4090 backend.
+CUDA is intentionally gated behind CPU parity. The CPU route is the correctness oracle for the RTX 4060 backend, and the public CUDA router currently opens only the narrow `k = 1` path when `cuda-runtime` is enabled and the NVIDIA driver initializes. CUDA runtime and kernel work must follow the safety constraints in `docs/cuda-safety.md`.
 
 ## Current Prototype Decisions
 
@@ -35,6 +35,7 @@ CUDA is intentionally not implemented yet. The CPU route is the correctness orac
 ```sh
 cp .env.example .env
 cargo test --workspace
+cargo test -p qtom-cuda --features cuda-runtime
 cargo run -p qtom-bench --release
 cargo run -p qtom-bench --release -- --stress
 cargo run -p qtom-bench --release -- --profile
@@ -44,6 +45,9 @@ cargo run -p qtom-bench --release -- --prod-profile
 cargo run -p qtom-bench --release -- --write-golden work/golden/8192x2048d16k8.fixture
 cargo run -p qtom-bench --release -- --golden-parity work/golden/8192x2048d16k8.fixture
 cargo run -p qtom-bench --release -- --cuda-plan work/golden/8192x2048d16k8.fixture
+cargo run -p qtom-bench --release -- --write-cuda-golden work/golden/8192x2048d16k1.fixture
+cargo run -p qtom-bench --release --features qtom-cuda/cuda-runtime -- --cuda-parity work/golden/8192x2048d16k1.fixture
+cargo run -p qtom-bench --release --features qtom-cuda/cuda-runtime -- --cuda-timing work/golden/8192x2048d16k1.fixture
 ```
 
 Add real secrets only to `.env`. Do not commit `.env`.
@@ -66,7 +70,13 @@ Use `--prod-profile` to measure production routing with observed-candidate debug
 
 Use `--write-golden` to export the default `8192 agents / 2048 tasks / 16 dims / k=8` deterministic fixture with exact `f32` bit-pattern encoding. Use `--golden-parity` to read that fixture back and compare sequential CPU routing against parallel CPU routing. This is the first parity artifact for the future CUDA backend.
 
-Use `--cuda-plan` to read a golden fixture through the CUDA scaffold and print the planned flat device-buffer sizes. The scaffold compiles on non-CUDA hosts but reports the CUDA backend as unavailable until host runtime and kernels are implemented.
+Use `--cuda-plan` to read a golden fixture through the CUDA scaffold and print the planned flat device-buffer sizes. The scaffold compiles on non-CUDA hosts. Backend status remains conservative for general routing, while `CudaRouter::route_batch` can route valid `k = 1` batches under `cuda-runtime` and returns unavailable for unsupported shapes or runtime failures.
+
+Use `--write-cuda-golden` to export the default `8192 agents / 2048 tasks / 16 dims / k=1` deterministic CUDA parity fixture. Use `--cuda-parity` with `--features qtom-cuda/cuda-runtime` to compare CPU routing against public `CudaRouter::route_batch` over that fixture. CUDA parity requires identical route decisions and allows only a small absolute tolerance on floating score fields.
+
+Use `--cuda-timing` with `--features qtom-cuda/cuda-runtime` to time whole public `route_batch` calls over the CUDA `k=1` golden fixture after first checking CPU/CUDA parity. This measures the current integration boundary and prints a CUDA stage breakdown for runtime init, host preparation, allocation, host/device copies, module/stream setup, kernel launch/sync, and decode.
+
+Use `cargo test -p qtom-cuda --features cuda-runtime` to opt into CUDA Driver API availability detection and resource-wrapper smoke tests. It verifies that the NVIDIA driver runtime can be loaded, queried, used for tiny stream/device-buffer lifecycles, used to load the route-kernel module, used for typed host/device copies, and used for decoded `k = 1` CPU parity through both the internal helper and public `CudaRouter::route_batch`. See `docs/cuda-toolchain.md`.
 
 Treat profile output as a coarse signal. Run it multiple times on a quiet machine before drawing hard conclusions.
 
@@ -94,6 +104,8 @@ crates/
 docs/          # design/spec documents
 ```
 
+Automated coding agents should also follow the repository directives in `AGENTS.md`.
+
 ## Verification
 
 ```sh
@@ -103,4 +115,4 @@ cargo test --workspace
 
 ## Notes
 
-This is an early prototype. The next major milestone is a CUDA backend that matches the CPU router exactly before attempting optimization.
+This is an early prototype. The next major milestone is reusing CUDA runtime/module resources across `k = 1` batches before attempting kernel-level optimization.

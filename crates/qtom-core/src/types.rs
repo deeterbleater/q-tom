@@ -98,6 +98,9 @@ pub enum RouteError {
         agents: usize,
         states: usize,
     },
+    BufferSizeOverflow {
+        context: &'static str,
+    },
 }
 
 impl std::fmt::Display for RouteError {
@@ -119,6 +122,9 @@ impl std::fmt::Display for RouteError {
                 f,
                 "runtime state length mismatch: {agents} agents, {states} states"
             ),
+            RouteError::BufferSizeOverflow { context } => {
+                write!(f, "{context} buffer size overflow")
+            }
         }
     }
 }

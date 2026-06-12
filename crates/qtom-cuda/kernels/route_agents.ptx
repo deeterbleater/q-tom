@@ -1,0 +1,179 @@
+.version 7.0
+.target sm_50
+.address_size 64
+
+.visible .entry qtom_route_agents_k1(
+    .param .u64 qtom_param_agent_vectors,
+    .param .u64 qtom_param_agent_ids,
+    .param .u64 qtom_param_request_vectors,
+    .param .u64 qtom_param_queue_depth_norm,
+    .param .u64 qtom_param_latency_norm,
+    .param .u64 qtom_param_cache_pressure_norm,
+    .param .u64 qtom_param_availability,
+    .param .u64 qtom_param_output_agent_ids,
+    .param .u64 qtom_param_output_effective_distances,
+    .param .u64 qtom_param_output_base_distances,
+    .param .u64 qtom_param_output_flags,
+    .param .u32 qtom_param_agent_count,
+    .param .u32 qtom_param_request_count,
+    .param .u32 qtom_param_dimensions,
+    .param .f32 qtom_param_alpha_queue,
+    .param .f32 qtom_param_beta_latency,
+    .param .f32 qtom_param_gamma_cache
+)
+{
+    .reg .pred %p<32>;
+    .reg .b32 %r<80>;
+    .reg .b64 %rd<80>;
+    .reg .f32 %f<80>;
+
+    ld.param.u32 %r4, [qtom_param_request_count];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ntid.x;
+    mad.lo.u32 %r3, %r1, %r2, %r0;
+    setp.ge.u32 %p0, %r3, %r4;
+    @%p0 bra DONE;
+
+    ld.param.u64 %rd1, [qtom_param_agent_vectors];
+    ld.param.u64 %rd2, [qtom_param_agent_ids];
+    ld.param.u64 %rd3, [qtom_param_request_vectors];
+    ld.param.u64 %rd4, [qtom_param_queue_depth_norm];
+    ld.param.u64 %rd5, [qtom_param_latency_norm];
+    ld.param.u64 %rd6, [qtom_param_cache_pressure_norm];
+    ld.param.u64 %rd7, [qtom_param_availability];
+    ld.param.u64 %rd8, [qtom_param_output_agent_ids];
+    ld.param.u64 %rd9, [qtom_param_output_effective_distances];
+    ld.param.u64 %rd10, [qtom_param_output_base_distances];
+    ld.param.u64 %rd11, [qtom_param_output_flags];
+    ld.param.u32 %r5, [qtom_param_agent_count];
+    ld.param.u32 %r6, [qtom_param_dimensions];
+    ld.param.f32 %f30, [qtom_param_alpha_queue];
+    ld.param.f32 %f31, [qtom_param_beta_latency];
+    ld.param.f32 %f32, [qtom_param_gamma_cache];
+
+    cvta.to.global.u64 %rd12, %rd1;
+    cvta.to.global.u64 %rd13, %rd2;
+    cvta.to.global.u64 %rd14, %rd3;
+    cvta.to.global.u64 %rd15, %rd4;
+    cvta.to.global.u64 %rd16, %rd5;
+    cvta.to.global.u64 %rd17, %rd6;
+    cvta.to.global.u64 %rd18, %rd7;
+    cvta.to.global.u64 %rd19, %rd8;
+    cvta.to.global.u64 %rd20, %rd9;
+    cvta.to.global.u64 %rd21, %rd10;
+    cvta.to.global.u64 %rd22, %rd11;
+
+    mov.b32 %f0, 0f7f800000;
+    mov.b32 %f1, 0f00000000;
+    mov.b32 %f2, 0f3f800000;
+    mov.u32 %r20, 0;
+    mov.u32 %r21, 0xffffffff;
+    mov.u32 %r22, 0;
+    mov.u32 %r23, 0;
+    mov.u32 %r24, 0xffffffff;
+    mov.f32 %f20, %f0;
+    mov.f32 %f21, %f0;
+    mov.f32 %f22, %f0;
+
+AGENT_LOOP:
+    setp.ge.u32 %p1, %r20, %r5;
+    @%p1 bra STORE_OUTPUT;
+
+    mov.b32 %f10, 0f00000000;
+    mov.u32 %r30, 0;
+    mul.lo.u32 %r31, %r20, %r6;
+    mul.lo.u32 %r32, %r3, %r6;
+
+DIM_LOOP:
+    setp.ge.u32 %p2, %r30, %r6;
+    @%p2 bra SCORE_AGENT;
+
+    add.u32 %r33, %r31, %r30;
+    mul.wide.u32 %rd30, %r33, 4;
+    add.u64 %rd31, %rd12, %rd30;
+    ld.global.f32 %f11, [%rd31];
+
+    add.u32 %r34, %r32, %r30;
+    mul.wide.u32 %rd32, %r34, 4;
+    add.u64 %rd33, %rd14, %rd32;
+    ld.global.f32 %f12, [%rd33];
+
+    sub.rn.f32 %f13, %f12, %f11;
+    fma.rn.f32 %f10, %f13, %f13, %f10;
+    add.u32 %r30, %r30, 1;
+    bra DIM_LOOP;
+
+SCORE_AGENT:
+    mul.wide.u32 %rd34, %r20, 4;
+
+    add.u64 %rd35, %rd13, %rd34;
+    ld.global.u32 %r35, [%rd35];
+
+    add.u64 %rd36, %rd18, %rd34;
+    ld.global.u32 %r36, [%rd36];
+    setp.ne.u32 %p3, %r36, 0;
+
+    add.u64 %rd37, %rd15, %rd34;
+    ld.global.f32 %f14, [%rd37];
+    add.u64 %rd38, %rd16, %rd34;
+    ld.global.f32 %f15, [%rd38];
+    add.u64 %rd39, %rd17, %rd34;
+    ld.global.f32 %f16, [%rd39];
+
+    mul.rn.f32 %f17, %f30, %f14;
+    fma.rn.f32 %f17, %f31, %f15, %f17;
+    fma.rn.f32 %f17, %f32, %f16, %f17;
+    add.rn.f32 %f18, %f2, %f17;
+    mul.rn.f32 %f19, %f10, %f18;
+    @!%p3 mov.f32 %f19, %f0;
+
+    setp.lt.f32 %p4, %f10, %f22;
+    setp.eq.f32 %p5, %f10, %f22;
+    setp.lt.u32 %p6, %r35, %r21;
+    and.pred %p7, %p5, %p6;
+    or.pred %p8, %p4, %p7;
+    @%p8 mov.u32 %r21, %r35;
+    @%p8 mov.f32 %f22, %f10;
+    @%p8 selp.u32 %r23, 1, 0, %p3;
+
+    setp.eq.u32 %p9, %r22, 0;
+    setp.lt.f32 %p10, %f19, %f20;
+    setp.eq.f32 %p11, %f19, %f20;
+    setp.lt.u32 %p12, %r35, %r24;
+    and.pred %p13, %p11, %p12;
+    or.pred %p14, %p9, %p10;
+    or.pred %p15, %p14, %p13;
+    and.pred %p16, %p3, %p15;
+    @%p16 mov.u32 %r24, %r35;
+    @%p16 mov.f32 %f20, %f19;
+    @%p16 mov.f32 %f21, %f10;
+    @%p16 mov.u32 %r22, 1;
+
+    add.u32 %r20, %r20, 1;
+    bra AGENT_LOOP;
+
+STORE_OUTPUT:
+    mul.wide.u32 %rd40, %r3, 4;
+
+    setp.ne.u32 %p17, %r22, 0;
+    selp.u32 %r40, %r24, 0, %p17;
+    add.u64 %rd41, %rd19, %rd40;
+    st.global.u32 [%rd41], %r40;
+
+    add.u64 %rd42, %rd20, %rd40;
+    st.global.f32 [%rd42], %f20;
+
+    add.u64 %rd43, %rd21, %rd40;
+    st.global.f32 [%rd43], %f21;
+
+    setp.ne.u32 %p18, %r5, 0;
+    setp.eq.u32 %p19, %r23, 0;
+    and.pred %p20, %p18, %p19;
+    selp.u32 %r41, 1, 0, %p20;
+    add.u64 %rd44, %rd22, %rd40;
+    st.global.u32 [%rd44], %r41;
+
+DONE:
+    ret;
+}

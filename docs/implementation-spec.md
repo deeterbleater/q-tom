@@ -2,7 +2,7 @@
 
 **Status:** Draft implementation spec
 **Target phase:** Single-machine prototype
-**Primary GPU target:** Windows 11 desktop with RTX 4090-class NVIDIA GPU, 16 GB VRAM, 32 GB host RAM
+**Primary GPU target:** Windows 11 desktop with RTX 4060 NVIDIA GPU, 8 GB dedicated VRAM, 32 GB host RAM
 **Secondary development target:** MacBook Pro M4 with 24 GB unified memory
 
 ## 1. Purpose
@@ -22,7 +22,7 @@ The first implementation should be narrow. It should prove or disprove the routi
 - Every task has a task vector in the same vector space.
 - Agent vectors and task vectors use a small fixed dimension, initially `d = 16` or `d = 32`.
 - Live state modifies routing but does not define the agent's core capability.
-- The RTX 4090 machine is the only practical CUDA test target.
+- The RTX 4060 Windows desktop is the current CUDA test target.
 - The MacBook Pro M4 is useful for CPU reference code, simulation, data generation, and possibly a future Metal backend, but not the first CUDA prototype.
 - RDMA, NVLink, NCCL, and multi-GPU behavior are out of scope for the first prototype.
 - Prototype 1 starts at 128 agents and scales by factors of 8: `128`, `1024`, `8192`, and later `65536` for stress testing if the earlier stages justify it.
@@ -439,16 +439,30 @@ Success criteria:
 - CPU benchmark reports how often the observed best candidate is unavailable.
 - CPU self-parity compares sequential and parallel routing over a golden fixture.
 
-### Phase 2: CUDA Kernel on RTX 4090
+### Phase 2: CUDA Kernel on RTX 4060
 
 Build the first GPU router.
+
+CUDA runtime and kernel work must follow the memory-safety constraints in `docs/cuda-safety.md`. The CUDA backend should fail closed with typed backend errors rather than returning partial or uninitialized route results.
 
 Initial scaffold:
 
 - `qtom-cuda` compiles on non-CUDA hosts.
-- `CudaRouter` implements `RouterBackend` and returns `BackendUnavailable` until host runtime and kernels are implemented.
+- CUDA Driver API availability detection is behind the opt-in `cuda-runtime` feature.
+- `CudaRouter` implements `RouterBackend`. General CUDA routing remains closed, while valid `k = 1` batches can route through CUDA behind the opt-in `cuda-runtime` feature.
 - The CUDA crate exposes the flat device-buffer plan for agents, requests, runtime state, candidate outputs, score outputs, and route flags.
 - The benchmark CLI can read a golden fixture and print the CUDA buffer plan without requiring CUDA.
+- CUDA buffer-plan sizing uses checked arithmetic and reports overflow before any allocation path exists.
+- CUDA resource ownership starts with typed RAII wrappers for the retained primary context, streams, and device buffers.
+- CUDA module ownership starts with typed RAII wrappers for checked-in PTX and function handles.
+- CUDA copy ownership starts with exact-length typed `f32` and `u32` host/device copies.
+- CUDA launch ownership starts with q-tom-specific typed parameter packing for `qtom_route_agents_k1`.
+- The first naive `k = 1` CUDA scoring kernel matches CPU output on a tiny feature-gated parity fixture.
+- The internal `k = 1` CUDA execution helper decodes output arrays into CPU-shaped `RoutingResult` values, including fallback/radius behavior.
+- Decoded `k = 1` CUDA routing matches CPU output on a deterministic generated fixture.
+- Public `CudaRouter::route_batch` uses the decoded `k = 1` path only when `cuda-runtime` is enabled, the driver initializes, and all request/state shapes validate; unsupported `k` values return `BackendUnavailable`.
+- The benchmark CLI can write a deterministic `k = 1` CUDA golden fixture and compare CPU routing against public `CudaRouter::route_batch` through the shared tolerant backend parity harness. Route decisions remain exact; only floating score fields have tolerance.
+- The benchmark CLI can time whole public `k = 1` CUDA route batches against CPU backends after parity is checked, including a CUDA stage breakdown for setup, transfer, kernel launch/sync, and decode.
 
 Kernel shape:
 
@@ -553,7 +567,7 @@ pub trait RouterBackend {
 Backends:
 
 - `CpuRouter`: always available. It provides the correctness oracle, a single-request path, and an order-preserving batch path. The current implementation can route a batch with an explicit worker count for request-level CPU parallelism experiments.
-- `CudaRouter`: used on the RTX 4090 machine. It starts as a portable scaffold that reports unavailable until the CUDA runtime and kernels are added.
+- `CudaRouter`: used on the RTX 4060 Windows machine. It stays portable without CUDA and currently exposes only the gated `k = 1` CUDA route under `cuda-runtime`; broader top-k routing remains unavailable until parity coverage expands.
 - `SimRouter`: deterministic test harness.
 
 The middleware should depend on this trait, not on CUDA directly.
@@ -574,9 +588,9 @@ Use the Mac for:
 
 Do not use it for the first GPU implementation unless a Metal backend becomes a separate goal.
 
-### Windows 11 RTX 4090 Machine
+### Windows 11 RTX 4060 Machine
 
-Use the 4090 machine for:
+Use the RTX 4060 Windows machine for:
 
 - CUDA kernel development.
 - GPU/CPU parity tests.
@@ -663,7 +677,7 @@ The prototype is promising if:
 - The vector map may not correlate with real task success.
 - Runtime penalties may need careful normalization to avoid drowning out capability distance.
 - Prototype 1 queue depth only captures Q-TOM-assigned pending work. It will not fully represent remote provider backpressure or local worker saturation until later pressure signals are added.
-- The RTX 4090 target has 16 GB VRAM available for this project, so very large agent sets should be introduced only after 128, 1024, and 8192-agent tests are stable.
+- The RTX 4060 target has 8 GB dedicated VRAM available for this project and midrange memory bandwidth, so very large agent sets and high batch sizes should be introduced only after 128, 1024, and 8192-agent tests are stable.
 - If the GPU is also running local inference, routing kernels may reduce tokens/sec or increase decode jitter.
 - Top-k selection is more expensive than single-winner selection, so the benchmark must measure `k = 1`, `k = 4`, and `k = 8` separately.
 - LLM-graded benchmarks can drift if the evaluator prompt, model, or rubric changes. Evaluator versioning is required.

@@ -9,7 +9,8 @@ pub mod score;
 pub mod types;
 
 pub use backend::{
-    BackendMismatch, BackendParityError, BackendParityReport, RouterBackend, assert_backend_parity,
+    BackendMismatch, BackendParityError, BackendParityReport, BackendParityTolerance,
+    RouterBackend, assert_backend_parity, assert_backend_parity_with_tolerance,
     routing_results_checksum,
 };
 pub use config::ProjectConfig;

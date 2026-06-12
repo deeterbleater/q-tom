@@ -10,7 +10,7 @@ Q-TOM is intended to become part of a larger middleware ecosystem for intelligen
 Available hardware:
 
 - MacBook Pro M4 with 24 GB unified memory.
-- Windows 11 desktop with RTX 4090-class NVIDIA GPU, 16 GB VRAM available for this project, and 32 GB host RAM.
+- Windows 11 desktop with RTX 4060 NVIDIA GPU, 8 GB dedicated VRAM available for this project, and 32 GB host RAM.
 
 The original concept included GPU-resident routing, RDMA ingress, multi-GPU coordination, and possible inference colocation. Those are useful future directions, but they would obscure the first question: whether the vector routing algorithm is correct, useful, and faster than a CPU baseline under plausible workloads.
 
@@ -20,7 +20,7 @@ Prototype Q-TOM first as a single-machine routing engine with:
 
 - A Rust CPU reference implementation.
 - A deterministic fixture generator and simulator.
-- A CUDA backend for the RTX 4090 machine.
+- A CUDA backend for the RTX 4060 Windows machine.
 - A backend-agnostic router trait for future middleware integration.
 - A top-k routing result rather than a single winner, with `k = 8` as the default prototype target.
 - A fixed local `Qwen3-2507` model profile for Prototype 1, with agent variation coming from prompt, tool bundle, MCP library set, and memory set.
@@ -88,7 +88,7 @@ Start with WSL2 Ubuntu on the Windows desktop for CUDA development unless setup 
 
 - The first milestone becomes concrete and testable.
 - The Mac can contribute immediately through Rust core code, fixtures, and CPU benchmarks.
-- The 4090 machine becomes the CUDA validation target.
+- The RTX 4060 Windows machine becomes the CUDA validation target.
 - The larger middleware can depend on a stable `RouterBackend` trait instead of GPU details.
 - Future RDMA and multi-GPU claims remain parked until the base routing path is proven.
 - The first benchmark scale starts at 128 agents and expands by 8x steps: 128, 1024, 8192, and later 65536 if earlier results justify it.
@@ -109,6 +109,6 @@ Start with WSL2 Ubuntu on the Windows desktop for CUDA development unless setup 
 5. Include available top-k output, debug observed top-k output, and score explanation fields in CPU output.
 6. Add substitute distance delta, top-k radius, and radius-for-3-candidates metrics.
 7. Benchmark CPU routing on Mac and Windows.
-8. Implement the simple CUDA router on the 4090 machine.
+8. Implement the simple CUDA router on the RTX 4060 Windows machine.
 9. Compare CPU/GPU correctness and performance.
 10. Decide whether optimized CUDA kernels are justified.
