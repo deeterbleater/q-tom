@@ -21,6 +21,8 @@ CUDA is intentionally gated behind CPU parity. The CPU route is the correctness 
 
 The larger orchestration architecture is described in `docs/agent-task-loom.md`. Its design spine is SBJR: Director Agents Split work, Constructor Agents Build granular deliverables, Integration Agents Join completed threads, and Curator Agents Remember decommissioned telemetry and lessons. Async concurrency is the default operating model at every layer.
 
+The path from the current router prototype to a formal system architecture is tracked in `docs/architecture-roadmap.md`.
+
 ## Current Prototype Decisions
 
 - Local-first orchestration target
