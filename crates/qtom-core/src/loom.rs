@@ -211,8 +211,11 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut decommission_count = 0;
     let mut memory_node_count = 0;
     let mut topology_commit_count = 0;
+    let mut integration_request_count = 0;
     let mut completed_task_ids = HashSet::new();
     let mut decommissioned_task_ids = HashSet::new();
+    let mut child_task_edges = Vec::new();
+    let mut integration_parent_task_ids = HashSet::new();
 
     for event in events {
         if matches!(event.event_type, LoomEventType::TaskAssigned) {
@@ -247,8 +250,29 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             }
             LoomEventType::MemoryNodeCreated => memory_node_count += 1,
             LoomEventType::TopologyCommitted => topology_commit_count += 1,
+            LoomEventType::IntegrationRequested => {
+                integration_request_count += 1;
+                if let Some(task_id) = event.task_id {
+                    integration_parent_task_ids.insert(task_id);
+                }
+            }
+            LoomEventType::TaskCreated => {
+                if let (Some(task_id), Some(parent_task_id)) = (event.task_id, event.parent_task_id)
+                {
+                    child_task_edges.push((task_id, parent_task_id));
+                }
+            }
             _ => {}
         }
+    }
+
+    if let Some((task_id, _parent_task_id)) = child_task_edges
+        .iter()
+        .filter(|(_task_id, parent_task_id)| !integration_parent_task_ids.contains(parent_task_id))
+        .min_by_key(|(task_id, _parent_task_id)| *task_id)
+        .copied()
+    {
+        return Err(LoomEventError::MissingTaskIntegration { task_id });
     }
 
     if let Some(task_id) = completed_task_ids
@@ -269,6 +293,7 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         decommission_count,
         memory_node_count,
         topology_commit_count,
+        integration_request_count,
     })
 }
 
@@ -329,6 +354,7 @@ pub struct ReplayValidationReport {
     pub decommission_count: usize,
     pub memory_node_count: usize,
     pub topology_commit_count: usize,
+    pub integration_request_count: usize,
 }
 
 fn required_cause(event_type: LoomEventType) -> Option<LoomEventType> {
@@ -367,6 +393,9 @@ pub enum LoomEventError {
     MissingMemoryEvidence {
         event_id: u64,
     },
+    MissingTaskIntegration {
+        task_id: u64,
+    },
 }
 
 impl std::fmt::Display for LoomEventError {
@@ -403,6 +432,9 @@ impl std::fmt::Display for LoomEventError {
             }
             Self::MissingMemoryEvidence { event_id } => {
                 write!(f, "memory node event {event_id} is missing evidence")
+            }
+            Self::MissingTaskIntegration { task_id } => {
+                write!(f, "child task {task_id} is missing integration path")
             }
         }
     }

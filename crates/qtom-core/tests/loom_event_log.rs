@@ -26,6 +26,11 @@ fn caused_by(mut event: LoomEvent, causation_id: u64) -> LoomEvent {
     event
 }
 
+fn child_task(mut event: LoomEvent, parent_task_id: u64) -> LoomEvent {
+    event.parent_task_id = Some(parent_task_id);
+    event
+}
+
 #[test]
 fn event_log_appends_and_replays_in_order() {
     let mut log = InMemoryEventLog::new();
@@ -404,4 +409,29 @@ fn replay_validation_accepts_memory_node_with_decommission_evidence() {
 
     assert_eq!(report.decommission_count, 1);
     assert_eq!(report.memory_node_count, 1);
+}
+
+#[test]
+fn replay_validation_rejects_child_task_without_integration_path() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        child_task(event(LoomEventType::TaskCreated, 2, 11), 10),
+    ];
+
+    let err = validate_events(&events).expect_err("child task should require integration path");
+
+    assert_eq!(err, LoomEventError::MissingTaskIntegration { task_id: 11 });
+}
+
+#[test]
+fn replay_validation_accepts_child_task_with_integration_path() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        child_task(event(LoomEventType::TaskCreated, 2, 11), 10),
+        event(LoomEventType::IntegrationRequested, 3, 10),
+    ];
+
+    let report = validate_events(&events).expect("child task has integration path");
+
+    assert_eq!(report.integration_request_count, 1);
 }
