@@ -26,8 +26,8 @@ pub use loom::{
     write_event_log_jsonl,
 };
 pub use loom_mock::{
-    ConstructorOutput, DirectorOutput, MockConstructor, MockConstructorConfig, MockDirector,
-    MockDirectorConfig,
+    ConstructorOutput, DirectorOutput, IntegrationOutput, MockConstructor, MockConstructorConfig,
+    MockDirector, MockDirectorConfig, MockIntegration, MockIntegrationConfig,
 };
 pub use loom_model::{
     ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup, IntegrationReport,

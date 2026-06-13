@@ -1,7 +1,8 @@
 use crate::loom_model::ensure_not_empty;
 use crate::{
-    ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog, IntegrationGroup, JoinPolicy,
-    LoomEvent, LoomEventType, LoomModelError, PlanNode, TaskEnvelope,
+    ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog, IntegrationGroup,
+    IntegrationReport, JoinPolicy, LoomEvent, LoomEventType, LoomModelError, PlanNode,
+    TaskEnvelope,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,5 +249,96 @@ impl Default for MockConstructor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConstructorOutput {
     pub artifact: ArtifactRef,
+    pub event_log: InMemoryEventLog,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockIntegrationConfig {
+    pub integration_agent_id: u64,
+    pub next_event_id: u64,
+    pub occurred_at_ms: u64,
+    pub correlation_id: u64,
+}
+
+impl Default for MockIntegrationConfig {
+    fn default() -> Self {
+        Self {
+            integration_agent_id: 700,
+            next_event_id: 3_000,
+            occurred_at_ms: 20_000,
+            correlation_id: 77,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockIntegration {
+    config: MockIntegrationConfig,
+}
+
+impl MockIntegration {
+    pub fn new(config: MockIntegrationConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn integrate_completed_children(
+        &self,
+        group: &IntegrationGroup,
+        completed_child_artifacts: &[ArtifactRef],
+    ) -> Result<IntegrationOutput, LoomModelError> {
+        for expected_task_id in &group.expected_child_task_ids {
+            if !completed_child_artifacts
+                .iter()
+                .any(|artifact| artifact.task_id == *expected_task_id)
+            {
+                return Err(LoomModelError::MissingTaskArtifact(*expected_task_id));
+            }
+        }
+
+        let included_task_ids = group.expected_child_task_ids.clone();
+        let final_artifact_refs = completed_child_artifacts
+            .iter()
+            .filter(|artifact| included_task_ids.contains(&artifact.task_id))
+            .map(|artifact| artifact.artifact_id)
+            .collect::<Vec<_>>();
+        let report = IntegrationReport::accepted(
+            group.integration_group_id,
+            included_task_ids,
+            final_artifact_refs,
+            format!("inline://integration/report/{}", group.integration_group_id),
+        )?;
+        let mut event_log = InMemoryEventLog::new();
+        event_log
+            .append(LoomEvent {
+                event_id: self.config.next_event_id,
+                event_type: LoomEventType::IntegrationRequested,
+                root_task_id: group.root_task_id,
+                task_id: Some(group.parent_task_id),
+                parent_task_id: None,
+                prompt_id: None,
+                agent_id: Some(self.config.integration_agent_id),
+                agent_role: Some("integration".to_string()),
+                topology_snapshot_id: None,
+                payload_schema: "qtom.mock.integration.v1".to_string(),
+                payload_ref: report.report_ref.clone(),
+                occurred_at_ms: self.config.occurred_at_ms,
+                causation_id: None,
+                correlation_id: self.config.correlation_id,
+            })
+            .expect("mock integration should create valid integration_requested event");
+
+        Ok(IntegrationOutput { report, event_log })
+    }
+}
+
+impl Default for MockIntegration {
+    fn default() -> Self {
+        Self::new(MockIntegrationConfig::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntegrationOutput {
+    pub report: IntegrationReport,
     pub event_log: InMemoryEventLog,
 }
