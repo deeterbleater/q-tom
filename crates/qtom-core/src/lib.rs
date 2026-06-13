@@ -37,7 +37,8 @@ pub use loom_model::{
     PlanNode, TaskEnvelope,
 };
 pub use loom_route::{
-    TaskRouteRequestConfig, build_route_request_from_task, simulated_agents_for_requests,
+    RouteDecision, TaskRouteRequestConfig, build_route_request_from_task,
+    simulated_agents_for_requests,
 };
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
