@@ -162,6 +162,8 @@ lossy prefilter: O(candidate_count), where candidate_count << agent_count
 
 The expected tradeoff is scale-dependent. At `8192` agents, the current full CPU scan is likely faster than maintaining and querying a projection layer. At `65536+` agents, and especially for cluster-sized swarms, deterministic lossy candidate generation may become the main path to lower p99 latency.
 
+For conversational memory, the same shape applies: raw logs remain canonical, but curator agents should derive compact memory-node candidate sets before exact routing. The `--cuda-scale` probe treats agent count as a proxy for curated candidate-set size and shows exact CUDA scoring remains roughly linear in that count, so reducing the candidate set is a first-class performance lever.
+
 The design must remain replayable. Tie handling, cell expansion order, hysteresis bands, and fallback behavior should be deterministic for the same fixture and live-state snapshot. The intended fuzziness is geometric and state-quantized, not random.
 
 Validation requirements:

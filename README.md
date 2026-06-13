@@ -76,6 +76,10 @@ Use `--write-cuda-golden` to export the default `8192 agents / 2048 tasks / 16 d
 
 Use `--cuda-timing` with `--features qtom-cuda/cuda-runtime` to time whole public `route_batch` calls over the CUDA `k=1` golden fixture after first checking CPU/CUDA parity. This measures the current integration boundary and prints a CUDA stage breakdown for runtime init, host preparation, allocation, host/device copies, module/stream setup, host launch/sync wall time, CUDA event device time, inferred host overhead, and decode.
 
+Use `--cuda-scale` with `--features qtom-cuda/cuda-runtime` to generate deterministic `k=1`, `dims=16` fixtures across multiple agent counts while holding task count fixed. This probes how exact CUDA scoring responds to smaller curated candidate sets before broader memory-retrieval or lossy prefilter work.
+
+See `docs/benchmark-ledger.md` for the current CPU p99, CUDA timing, CUDA stage-breakdown, and candidate-set scale numbers.
+
 Use `cargo test -p qtom-cuda --features cuda-runtime` to opt into CUDA Driver API availability detection and resource-wrapper smoke tests. It verifies that the NVIDIA driver runtime can be loaded, queried, used for tiny stream/device-buffer lifecycles, used to load the route-kernel module, used for typed host/device copies, and used for decoded `k = 1` CPU parity through both the internal helper and public `CudaRouter::route_batch`. See `docs/cuda-toolchain.md`.
 
 Treat profile output as a coarse signal. Run it multiple times on a quiet machine before drawing hard conclusions.

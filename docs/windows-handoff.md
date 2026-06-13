@@ -93,6 +93,8 @@ The Windows CUDA target is an RTX 4060 with 8 GB dedicated VRAM and 32 GB host R
 
 ## Current Benchmark Reference
 
+See `docs/benchmark-ledger.md` for the current consolidated CPU p99, CUDA timing, CUDA stage-breakdown, and `--cuda-scale` results.
+
 Recent CPU smoke result at `8192 agents / 2048 tasks / 16 dims`:
 
 ```text
@@ -131,6 +133,21 @@ cuda-reuse decode_ms             ~= 0.1
 
 After runtime/module/buffer reuse, decode lookup cleanup, CUDA event timing, a `dimensions == 16` unrolled distance path, and precomputed per-agent score weights, the obvious cost center is still actual device work scanning every agent for every request. Launch/sync overhead, allocation, transfer, and decode are not the current bottlenecks for this fixture.
 
+Recent `--cuda-scale` timing holds `tasks=2048`, `dims=16`, and `k=1` constant while varying candidate-set size:
+
+```text
+agents   cuda-reuse avg ms   device ms   speedup vs CPU parallel
+512      ~= 0.49             ~= 0.29     ~= 2.6-3.0x
+1024     ~= 0.78             ~= 0.57     ~= 2.3-2.6x
+2048     ~= 1.4              ~= 1.14     ~= 1.9-2.2x
+4096     ~= 2.6              ~= 2.35     ~= 1.7-1.8x
+8192     ~= 5.0              ~= 4.6-5.0  ~= 1.4-1.6x
+16384    ~= 9.5              ~= 8.6-9.3  ~= 1.5-1.7x
+32768    ~= 20               ~= 17-19    ~= 1.4-1.6x
+```
+
+This supports the memory-curation architecture: exact CUDA scoring is useful, but the strongest lever is handing it compact curated candidate sets rather than asking every request to scan the whole archive.
+
 ## Design Constraints
 
 - CPU remains the correctness oracle.
@@ -139,14 +156,14 @@ After runtime/module/buffer reuse, decode lookup cleanup, CUDA event timing, a `
 - CUDA kernel changes should stay conservative and parity-first.
 - Start with `k = 1`, one CUDA thread routing one task against all agents.
 - Do not optimize until CPU/GPU parity is proven.
-- Lossy deterministic candidate generation is a later scale feature, not the next task.
+- Lossy deterministic candidate generation and memory curation are scale features, but the `--cuda-scale` curve says they are central to the architecture rather than decorative.
 
 ## Next Task
 
 Continue from:
 
 ```text
-Reduce repeated full-agent-scan work in the k = 1 CUDA path without widening beyond k = 1.
+Model curated candidate-set routing before widening beyond k = 1.
 ```
 
 Recommended next implementation slice:
@@ -158,10 +175,10 @@ Recommended next implementation slice:
 5. Keep CPU parity tests for tiny and deterministic generated fixtures with debug telemetry disabled.
 6. Keep default non-CUDA builds compiling.
 7. Do not add `k > 1` until the optimized `k = 1` path remains stable.
-8. Prefer a measured next step such as tiled/shared-memory request or agent reuse, and keep exact CPU parity as the gate.
+8. Prefer a measured next step such as a candidate-set or memory-node prefilter benchmark, tiled/shared-memory request or agent reuse, and keep exact CPU parity as the gate.
 
 ## Prompt To Use In New Codex Thread
 
 ```text
-Continue Q-TOM CUDA scaffold from docs/windows-handoff.md. The k = 1 CUDA path now has CUDA event timing, a dimensions == 16 unrolled distance path, and precomputed per-agent score weights; reusable RTX 4060 timing is roughly 5 ms for the 8192x2048d16 fixture. Start the next measured kernel-body improvement, likely reducing repeated full-agent-scan work, while preserving BackendUnavailable for unsupported cases, keeping non-CUDA hosts compiling, and preserving CPU/golden-fixture parity as the goal.
+Continue Q-TOM CUDA scaffold from docs/windows-handoff.md. The k = 1 CUDA path now has CUDA event timing, a dimensions == 16 unrolled distance path, precomputed per-agent score weights, and a --cuda-scale probe showing exact scoring is roughly linear in candidate count. Start the next measured improvement with memory-curated candidate sets in mind, likely a candidate-set/prefilter benchmark or shared-memory tile experiment, while preserving BackendUnavailable for unsupported cases, keeping non-CUDA hosts compiling, and preserving CPU/golden-fixture parity as the goal.
 ```

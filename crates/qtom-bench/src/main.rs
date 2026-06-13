@@ -17,6 +17,9 @@ const BATCH_PROFILE_AGENT_COUNTS: [usize; 3] = [8192, 65536, 262144];
 const PROFILE_DIMENSIONS: [usize; 2] = [16, 32];
 const TOP_K_VALUES: [usize; 3] = [1, 4, 8];
 const PROD_TOP_K_VALUES: [usize; 2] = [1, 8];
+const CUDA_SCALE_AGENT_COUNTS: [usize; 7] = [512, 1024, 2048, 4096, 8192, 16384, 32768];
+const CUDA_SCALE_TASK_COUNT: usize = 2048;
+const CUDA_SCALE_DIMENSIONS: usize = 16;
 const CUDA_PARITY_SCORE_ABS_EPSILON: f32 = 1.0e-5;
 const CUDA_TIMING_ITERATIONS: usize = 5;
 
@@ -48,6 +51,7 @@ fn main() {
         BenchMode::GoldenParity { path } => run_golden_parity(path),
         BenchMode::CudaParity { path } => run_cuda_parity(path),
         BenchMode::CudaTiming { path } => run_cuda_timing(path),
+        BenchMode::CudaScale => run_cuda_scale(),
         BenchMode::CudaPlan { path } => run_cuda_plan(path),
     }
 }
@@ -256,6 +260,87 @@ fn run_cuda_timing(path: &Path) {
     print_backend_timing(&cuda_reuse, &requests, &states, 0, CUDA_TIMING_ITERATIONS);
     print_cuda_timing_breakdown(&cuda, &requests, &states, CUDA_TIMING_ITERATIONS);
     print_cuda_reuse_timing_breakdown(&cuda_reuse, &requests, &states, CUDA_TIMING_ITERATIONS);
+}
+
+fn run_cuda_scale() {
+    let runtime = CudaRuntime::initialize().expect("CUDA runtime should initialize");
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .max(1)
+        .min(CUDA_SCALE_TASK_COUNT);
+
+    println!(
+        "cuda_scale_header,tasks={},dims={},k=1,iterations={},workers={}",
+        CUDA_SCALE_TASK_COUNT, CUDA_SCALE_DIMENSIONS, CUDA_TIMING_ITERATIONS, workers
+    );
+    println!(
+        "cuda_scale_columns,agents,tasks,dims,candidates,cpu_parallel_avg_ms,cuda_reuse_avg_ms,cuda_reuse_device_ms,cuda_reuse_host_to_device_ms,cuda_reuse_decode_ms,cuda_speedup_vs_cpu_parallel"
+    );
+
+    for agent_count in CUDA_SCALE_AGENT_COUNTS {
+        let config = FixtureConfig {
+            agent_count,
+            task_count: CUDA_SCALE_TASK_COUNT,
+            dimensions: CUDA_SCALE_DIMENSIONS,
+            k: 1,
+            seed: scenario_seed(agent_count, 1),
+        };
+        let fixture = generate_fixture(config);
+        let route_table = AgentRouteTable::from_agent_slice(&fixture.agents)
+            .expect("generated fixture should have a valid route table");
+        let cpu_parallel = CpuWorkerBackend::new("cpu-parallel", fixture.agents.clone(), workers);
+        let executor = CudaRouteK1Executor::new(&runtime, ScoreCoefficients::default())
+            .expect("CUDA route executor should initialize");
+        let cuda_reuse = CudaReuseBackend {
+            name: "cuda-reuse",
+            executor,
+            route_table,
+        };
+
+        assert_backend_parity_with_tolerance(
+            &cpu_parallel,
+            &cuda_reuse,
+            &fixture.requests,
+            &fixture.states,
+            BackendParityTolerance::new(CUDA_PARITY_SCORE_ABS_EPSILON),
+        )
+        .expect("CUDA reuse backend should match CPU before scale timing");
+
+        let cpu_report = time_backend_batch(
+            &cpu_parallel,
+            &fixture.requests,
+            &fixture.states,
+            CUDA_TIMING_ITERATIONS,
+        );
+        let cuda_report = time_backend_batch(
+            &cuda_reuse,
+            &fixture.requests,
+            &fixture.states,
+            CUDA_TIMING_ITERATIONS,
+        );
+        let cuda_breakdown = time_cuda_reuse_route_breakdown(
+            &cuda_reuse,
+            &fixture.requests,
+            &fixture.states,
+            CUDA_TIMING_ITERATIONS,
+        );
+        let speedup = cpu_report.avg_batch_ms / cuda_report.avg_batch_ms.max(f64::EPSILON);
+
+        println!(
+            "cuda_scale,agents={},tasks={},dims={},candidates={},cpu_parallel_avg_ms={:.3},cuda_reuse_avg_ms={:.3},cuda_reuse_device_ms={:.3},cuda_reuse_host_to_device_ms={:.3},cuda_reuse_decode_ms={:.3},cuda_speedup_vs_cpu_parallel={:.3}",
+            agent_count,
+            config.task_count,
+            config.dimensions,
+            agent_count * config.task_count,
+            cpu_report.avg_batch_ms,
+            cuda_report.avg_batch_ms,
+            cuda_breakdown.avg_kernel_device_ms,
+            cuda_breakdown.avg_host_to_device_ms,
+            cuda_breakdown.avg_decode_ms,
+            speedup
+        );
+    }
 }
 
 fn run_cuda_plan(path: &Path) {
@@ -1151,6 +1236,7 @@ enum BenchMode {
     GoldenParity { path: std::path::PathBuf },
     CudaParity { path: std::path::PathBuf },
     CudaTiming { path: std::path::PathBuf },
+    CudaScale,
     CudaPlan { path: std::path::PathBuf },
     Invalid(String),
 }
@@ -1196,6 +1282,7 @@ impl BenchMode {
                     };
                     mode = Self::CudaTiming { path: path.into() };
                 }
+                "--cuda-scale" => mode = Self::CudaScale,
                 "--cuda-plan" => {
                     let Some(path) = args.next() else {
                         return Self::Invalid("--cuda-plan requires a path".to_string());
@@ -1221,6 +1308,7 @@ impl BenchMode {
             | Self::GoldenParity { .. }
             | Self::CudaParity { .. }
             | Self::CudaTiming { .. }
+            | Self::CudaScale
             | Self::CudaPlan { .. }
             | Self::Invalid(_) => &[],
         }
@@ -1239,6 +1327,7 @@ impl BenchMode {
             Self::GoldenParity { .. } => "golden-parity",
             Self::CudaParity { .. } => "cuda-parity",
             Self::CudaTiming { .. } => "cuda-timing",
+            Self::CudaScale => "cuda-scale",
             Self::CudaPlan { .. } => "cuda-plan",
             Self::Invalid(_) => "invalid",
         }
@@ -1361,6 +1450,14 @@ mod tests {
             BenchMode::CudaTiming {
                 path: "work/golden/cuda-k1.fixture".into()
             }
+        );
+    }
+
+    #[test]
+    fn cuda_scale_flag_selects_mode() {
+        assert_eq!(
+            BenchMode::from_args(["--cuda-scale".to_string()]),
+            BenchMode::CudaScale
         );
     }
 
