@@ -114,6 +114,65 @@ pub fn task_dependency_projection(log: &InMemoryEventLog) -> String {
     output
 }
 
+pub fn artifact_provenance_projection(log: &InMemoryEventLog) -> String {
+    let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
+    let declared_events = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::ArtifactDeclared)
+        .collect::<Vec<_>>();
+    let ready_events_by_cause = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::ArtifactReady)
+        .filter_map(|event| event.causation_id.map(|cause| (cause, event)))
+        .collect::<HashMap<_, _>>();
+
+    let mut output = String::from("flowchart TD\n");
+
+    for declared_event in declared_events {
+        let Some(task_id) = declared_event.task_id else {
+            continue;
+        };
+        let declared_node = format!("artifact_declared_{}", declared_event.event_id);
+        let task_node = format!("task_{task_id}");
+        let artifact_id = ref_tail(declared_event.payload_ref.as_str());
+
+        writeln!(output, "  {task_node}[\"Task {task_id}\"]")
+            .expect("writing to String should not fail");
+        writeln!(
+            output,
+            "  {declared_node}[\"ArtifactDeclared {artifact_id}\"]"
+        )
+        .expect("writing to String should not fail");
+        writeln!(output, "  {task_node} --> {declared_node}")
+            .expect("writing to String should not fail");
+
+        if let Some(ready_event) = ready_events_by_cause.get(&declared_event.event_id) {
+            let ready_node = format!("artifact_ready_{}", ready_event.event_id);
+            let ready_artifact_id = ref_tail(ready_event.payload_ref.as_str());
+
+            writeln!(
+                output,
+                "  {ready_node}[\"ArtifactReady {ready_artifact_id}\"]"
+            )
+            .expect("writing to String should not fail");
+            writeln!(output, "  {declared_node} --> {ready_node}")
+                .expect("writing to String should not fail");
+
+            if let Some(agent_id) = ready_event.agent_id {
+                let agent_node = format!("agent_{agent_id}");
+                writeln!(output, "  {agent_node}[\"Agent {agent_id}\"]")
+                    .expect("writing to String should not fail");
+                writeln!(output, "  {ready_node} --> {agent_node}")
+                    .expect("writing to String should not fail");
+            }
+        }
+    }
+
+    output
+}
+
 pub fn memory_lineage_projection(log: &InMemoryEventLog) -> String {
     let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
     let decommission_events = events

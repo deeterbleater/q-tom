@@ -41,7 +41,8 @@ pub use loom_model::{
     write_decommission_packets_jsonl,
 };
 pub use loom_projection::{
-    memory_lineage_projection, route_trace_projection, task_dependency_projection,
+    artifact_provenance_projection, memory_lineage_projection, route_trace_projection,
+    task_dependency_projection,
 };
 pub use loom_route::{
     RouteDecision, TaskRouteDecisionEventConfig, TaskRouteRequestConfig,

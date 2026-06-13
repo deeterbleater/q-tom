@@ -1,5 +1,6 @@
 use qtom_core::{
-    MockTaskLoom, memory_lineage_projection, route_trace_projection, task_dependency_projection,
+    MockTaskLoom, artifact_provenance_projection, memory_lineage_projection,
+    route_trace_projection, task_dependency_projection,
 };
 
 #[test]
@@ -58,4 +59,25 @@ fn task_dependency_projection_is_derived_from_task_and_integration_events() {
     assert!(projection.contains("task_10 --> task_1001"));
     assert!(projection.contains("task_1000 --> integration_10"));
     assert!(projection.contains("task_1001 --> integration_10"));
+}
+
+#[test]
+fn artifact_provenance_projection_is_derived_from_artifact_events() {
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+
+    let projection = artifact_provenance_projection(&output.event_log);
+
+    assert!(projection.starts_with("flowchart TD\n"));
+    assert!(projection.contains("task_1000[\"Task 1000\"]"));
+    assert!(projection.contains("artifact_declared_2000[\"ArtifactDeclared 900\"]"));
+    assert!(projection.contains("artifact_ready_2001[\"ArtifactReady 900\"]"));
+    assert!(projection.contains("agent_10000[\"Agent 10000\"]"));
+    assert!(projection.contains("task_1000 --> artifact_declared_2000"));
+    assert!(projection.contains("artifact_declared_2000 --> artifact_ready_2001"));
+    assert!(projection.contains("artifact_ready_2001 --> agent_10000"));
+    assert!(projection.contains("task_1001 --> artifact_declared_2010"));
+    assert!(projection.contains("artifact_declared_2010 --> artifact_ready_2011"));
+    assert!(projection.contains("artifact_ready_2011 --> agent_10001"));
 }
