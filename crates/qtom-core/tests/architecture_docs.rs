@@ -118,3 +118,45 @@ fn core_entities_cover_required_model() {
         );
     }
 }
+
+#[test]
+fn event_vocabulary_covers_replay_events() {
+    let events_path = repo_root().join("docs/event-vocabulary.md");
+    let events = fs::read_to_string(&events_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", events_path.display()));
+    let events = events.to_lowercase();
+
+    let required_events = [
+        "task_created",
+        "task_assigned",
+        "artifact_declared",
+        "artifact_ready",
+        "signal_emitted",
+        "task_blocked",
+        "task_resumed",
+        "task_completed",
+        "agent_decommissioned",
+        "integration_requested",
+        "memory_node_created",
+        "index_updated",
+        "route_decision_recorded",
+        "topology_proposed",
+        "topology_committed",
+    ];
+
+    for event_name in required_events {
+        assert!(
+            events.contains(event_name),
+            "event vocabulary should define `{event_name}`"
+        );
+    }
+
+    let required_event_terms = ["payload", "producer", "consumer", "replay"];
+
+    for term in required_event_terms {
+        assert!(
+            events.contains(term),
+            "event vocabulary should document `{term}` expectations"
+        );
+    }
+}
