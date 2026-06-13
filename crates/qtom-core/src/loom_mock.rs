@@ -1,8 +1,8 @@
 use crate::loom_model::ensure_not_empty;
 use crate::{
-    ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog, IntegrationGroup,
-    IntegrationReport, JoinPolicy, LoomEvent, LoomEventType, LoomModelError, PlanNode,
-    TaskEnvelope,
+    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog,
+    IntegrationGroup, IntegrationReport, JoinPolicy, LoomEvent, LoomEventType, LoomModelError,
+    MemoryNode, MemoryNodeKind, PlanNode, TaskEnvelope,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,5 +340,95 @@ impl Default for MockIntegration {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegrationOutput {
     pub report: IntegrationReport,
+    pub event_log: InMemoryEventLog,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockCuratorConfig {
+    pub curator_agent_id: u64,
+    pub next_memory_node_id: u64,
+    pub next_event_id: u64,
+    pub occurred_at_ms: u64,
+    pub correlation_id: u64,
+}
+
+impl Default for MockCuratorConfig {
+    fn default() -> Self {
+        Self {
+            curator_agent_id: 800,
+            next_memory_node_id: 1_500,
+            next_event_id: 4_000,
+            occurred_at_ms: 30_000,
+            correlation_id: 77,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockCurator {
+    config: MockCuratorConfig,
+}
+
+impl MockCurator {
+    pub fn new(config: MockCuratorConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn curate_decommission_packet(
+        &self,
+        packet: &AgentDecommissionPacket,
+        decommission_event: &LoomEvent,
+    ) -> Result<CuratorOutput, LoomModelError> {
+        let memory_node = MemoryNode::from_packet(
+            self.config.next_memory_node_id,
+            MemoryNodeKind::Episode,
+            packet.root_task_id,
+            packet.task_id,
+            packet.packet_id,
+            vec![packet.self_summary_ref.clone()],
+            format!(
+                "{} agent {} task {}",
+                packet.final_status, packet.agent_id, packet.task_id
+            ),
+        )?;
+        let mut event_log = InMemoryEventLog::new();
+        event_log
+            .append(decommission_event.clone())
+            .expect("mock curator should receive valid agent_decommissioned evidence");
+        event_log
+            .append(LoomEvent {
+                event_id: self.config.next_event_id,
+                event_type: LoomEventType::MemoryNodeCreated,
+                root_task_id: packet.root_task_id,
+                task_id: Some(packet.task_id),
+                parent_task_id: None,
+                prompt_id: Some(packet.prompt_id),
+                agent_id: Some(self.config.curator_agent_id),
+                agent_role: Some("curator".to_string()),
+                topology_snapshot_id: None,
+                payload_schema: "qtom.mock.curator.v1".to_string(),
+                payload_ref: format!("inline://memory/{}", memory_node.memory_node_id),
+                occurred_at_ms: self.config.occurred_at_ms,
+                causation_id: Some(decommission_event.event_id),
+                correlation_id: self.config.correlation_id,
+            })
+            .expect("mock curator should create valid memory_node_created event");
+
+        Ok(CuratorOutput {
+            memory_node,
+            event_log,
+        })
+    }
+}
+
+impl Default for MockCurator {
+    fn default() -> Self {
+        Self::new(MockCuratorConfig::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CuratorOutput {
+    pub memory_node: MemoryNode,
     pub event_log: InMemoryEventLog,
 }
