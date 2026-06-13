@@ -1,8 +1,8 @@
 use std::fs;
 
 use qtom_core::{
-    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
-    append_event_log_jsonl, read_event_log_jsonl, write_event_log_jsonl,
+    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, MockTaskLoom, ReplayCursor,
+    append_event_log_jsonl, loom_replay_report, read_event_log_jsonl, write_event_log_jsonl,
 };
 
 fn temp_path(name: &str) -> std::path::PathBuf {
@@ -120,4 +120,24 @@ fn jsonl_append_rejects_duplicate_without_changing_file() {
 
     assert_eq!(err, LoomEventError::DuplicateEventId(1));
     assert_eq!(after, before);
+}
+
+#[test]
+fn jsonl_round_trip_preserves_full_mock_replay_report() {
+    let path = temp_path("mock-replay-report");
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+    let expected_report =
+        loom_replay_report(&output.event_log).expect("mock log should replay before persistence");
+
+    write_event_log_jsonl(&path, output.event_log.replay(ReplayCursor::start()))
+        .expect("jsonl write should succeed");
+    let loaded = read_event_log_jsonl(&path).expect("jsonl read should succeed");
+    fs::remove_file(&path).ok();
+
+    let loaded_report =
+        loom_replay_report(&loaded).expect("loaded mock log should replay after persistence");
+
+    assert_eq!(loaded_report, expected_report);
 }
