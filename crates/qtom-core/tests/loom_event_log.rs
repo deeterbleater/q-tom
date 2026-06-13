@@ -319,3 +319,35 @@ fn replay_validation_rejects_bad_causation_in_slice() {
         }
     );
 }
+
+#[test]
+fn replay_validation_rejects_completed_task_without_decommission() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        event(LoomEventType::TaskCompleted, 2, 10),
+    ];
+
+    let err = validate_events(&events).expect_err("completed task should require decommission");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingTaskDecommission { task_id: 10 }
+    );
+}
+
+#[test]
+fn replay_validation_accepts_completed_task_with_decommission() {
+    let mut decommissioned = event(LoomEventType::AgentDecommissioned, 3, 10);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        event(LoomEventType::TaskCompleted, 2, 10),
+        decommissioned,
+    ];
+
+    let report = validate_events(&events).expect("completed task has decommission");
+
+    assert_eq!(report.completion_count, 1);
+    assert_eq!(report.decommission_count, 1);
+}

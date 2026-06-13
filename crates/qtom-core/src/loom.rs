@@ -211,6 +211,8 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut decommission_count = 0;
     let mut memory_node_count = 0;
     let mut topology_commit_count = 0;
+    let mut completed_task_ids = HashSet::new();
+    let mut decommissioned_task_ids = HashSet::new();
 
     for event in events {
         replay_log.append(event.clone())?;
@@ -223,12 +225,30 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         match event.event_type {
             LoomEventType::RouteDecisionRecorded => route_decision_count += 1,
             LoomEventType::TaskAssigned => assignment_count += 1,
-            LoomEventType::TaskCompleted => completion_count += 1,
-            LoomEventType::AgentDecommissioned => decommission_count += 1,
+            LoomEventType::TaskCompleted => {
+                completion_count += 1;
+                if let Some(task_id) = event.task_id {
+                    completed_task_ids.insert(task_id);
+                }
+            }
+            LoomEventType::AgentDecommissioned => {
+                decommission_count += 1;
+                if let Some(task_id) = event.task_id {
+                    decommissioned_task_ids.insert(task_id);
+                }
+            }
             LoomEventType::MemoryNodeCreated => memory_node_count += 1,
             LoomEventType::TopologyCommitted => topology_commit_count += 1,
             _ => {}
         }
+    }
+
+    if let Some(task_id) = completed_task_ids
+        .difference(&decommissioned_task_ids)
+        .min()
+        .copied()
+    {
+        return Err(LoomEventError::MissingTaskDecommission { task_id });
     }
 
     Ok(ReplayValidationReport {
@@ -284,6 +304,9 @@ pub enum LoomEventError {
         expected: LoomEventType,
         actual: LoomEventType,
     },
+    MissingTaskDecommission {
+        task_id: u64,
+    },
 }
 
 impl std::fmt::Display for LoomEventError {
@@ -312,6 +335,9 @@ impl std::fmt::Display for LoomEventError {
                 f,
                 "loom event {event_type:?} causation id {causation_id} should reference {expected:?}, got {actual:?}"
             ),
+            Self::MissingTaskDecommission { task_id } => {
+                write!(f, "completed task {task_id} is missing decommission event")
+            }
         }
     }
 }
