@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::{InMemoryEventLog, LoomEvent, LoomEventType, ReplayCursor};
@@ -46,6 +47,65 @@ pub fn route_trace_projection(log: &InMemoryEventLog) -> String {
                 writeln!(output, "  {agent_node}[\"Agent {agent_id}\"]")
                     .expect("writing to String should not fail");
                 writeln!(output, "  {assignment_node} --> {agent_node}")
+                    .expect("writing to String should not fail");
+            }
+        }
+    }
+
+    output
+}
+
+pub fn task_dependency_projection(log: &InMemoryEventLog) -> String {
+    let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
+    let task_events = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::TaskCreated)
+        .collect::<Vec<_>>();
+    let integration_parent_ids = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::IntegrationRequested)
+        .filter_map(|event| event.task_id)
+        .collect::<HashSet<_>>();
+    let child_task_ids_by_parent = task_events
+        .iter()
+        .filter_map(|event| Some((event.task_id?, event.parent_task_id?)))
+        .fold(
+            HashMap::<u64, Vec<u64>>::new(),
+            |mut map, (task, parent)| {
+                map.entry(parent).or_default().push(task);
+                map
+            },
+        );
+
+    let mut output = String::from("flowchart TD\n");
+
+    for task_event in task_events {
+        let Some(task_id) = task_event.task_id else {
+            continue;
+        };
+        let task_node = format!("task_{task_id}");
+        writeln!(output, "  {task_node}[\"Task {task_id}\"]")
+            .expect("writing to String should not fail");
+
+        if let Some(parent_task_id) = task_event.parent_task_id {
+            writeln!(output, "  task_{parent_task_id} --> {task_node}")
+                .expect("writing to String should not fail");
+        }
+    }
+
+    for parent_task_id in integration_parent_ids {
+        let integration_node = format!("integration_{parent_task_id}");
+        writeln!(
+            output,
+            "  {integration_node}[\"Integration {parent_task_id}\"]"
+        )
+        .expect("writing to String should not fail");
+
+        if let Some(child_task_ids) = child_task_ids_by_parent.get(&parent_task_id) {
+            for child_task_id in child_task_ids {
+                writeln!(output, "  task_{child_task_id} --> {integration_node}")
                     .expect("writing to String should not fail");
             }
         }
