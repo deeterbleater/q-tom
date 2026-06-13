@@ -1,6 +1,6 @@
 use qtom_core::{
-    DependencyEdge, DependencyKind, IntegrationGroup, JoinPolicy, LoomModelError, PlanNode,
-    TaskEnvelope,
+    ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup, IntegrationReport,
+    IntegrationStatus, JoinPolicy, LoomModelError, PlanNode, TaskEnvelope,
 };
 
 #[test]
@@ -102,4 +102,53 @@ fn integration_group_rejects_missing_expected_children() {
         err,
         LoomModelError::EmptyCollection("expected_child_task_ids")
     );
+}
+
+#[test]
+fn artifact_ref_preserves_task_and_agent_lineage() {
+    let artifact = ArtifactRef::new(900, 1, 11, 301, "report.markdown", "inline://artifact/900")
+        .expect("artifact ref should be valid");
+
+    assert_eq!(artifact.artifact_id, 900);
+    assert_eq!(artifact.root_task_id, 1);
+    assert_eq!(artifact.task_id, 11);
+    assert_eq!(artifact.agent_id, 301);
+    assert_eq!(artifact.artifact_kind, "report.markdown");
+    assert_eq!(artifact.content_ref, "inline://artifact/900");
+}
+
+#[test]
+fn artifact_ref_rejects_empty_content_ref() {
+    let err = ArtifactRef::new(900, 1, 11, 301, "report.markdown", " ")
+        .expect_err("empty content ref should fail");
+
+    assert_eq!(err, LoomModelError::EmptyField("content_ref"));
+}
+
+#[test]
+fn accepted_integration_report_tracks_completed_children_and_artifacts() {
+    let report = IntegrationReport::accepted(
+        88,
+        vec![11, 12],
+        vec![900, 901],
+        "inline://integration/report/88",
+    )
+    .expect("accepted integration report should be valid");
+
+    assert_eq!(report.integration_group_id, 88);
+    assert_eq!(report.included_task_ids, vec![11, 12]);
+    assert!(report.excluded_task_ids.is_empty());
+    assert!(report.conflict_edges.is_empty());
+    assert!(report.gap_edges.is_empty());
+    assert!(report.repair_task_ids.is_empty());
+    assert_eq!(report.final_artifact_refs, vec![900, 901]);
+    assert_eq!(report.acceptance_status, IntegrationStatus::Accepted);
+}
+
+#[test]
+fn accepted_integration_report_requires_included_tasks() {
+    let err = IntegrationReport::accepted(88, vec![], vec![900], "inline://integration/report/88")
+        .expect_err("accepted report should require included children");
+
+    assert_eq!(err, LoomModelError::EmptyCollection("included_task_ids"));
 }

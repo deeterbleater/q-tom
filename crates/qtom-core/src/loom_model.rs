@@ -160,6 +160,87 @@ pub enum JoinPolicy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArtifactRef {
+    pub artifact_id: u64,
+    pub root_task_id: u64,
+    pub task_id: u64,
+    pub agent_id: u64,
+    pub artifact_kind: String,
+    pub content_ref: String,
+}
+
+impl ArtifactRef {
+    pub fn new(
+        artifact_id: u64,
+        root_task_id: u64,
+        task_id: u64,
+        agent_id: u64,
+        artifact_kind: impl Into<String>,
+        content_ref: impl Into<String>,
+    ) -> Result<Self, LoomModelError> {
+        let artifact_kind = artifact_kind.into();
+        let content_ref = content_ref.into();
+        ensure_not_empty("artifact_kind", &artifact_kind)?;
+        ensure_not_empty("content_ref", &content_ref)?;
+
+        Ok(Self {
+            artifact_id,
+            root_task_id,
+            task_id,
+            agent_id,
+            artifact_kind,
+            content_ref,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntegrationReport {
+    pub integration_group_id: u64,
+    pub included_task_ids: Vec<u64>,
+    pub excluded_task_ids: Vec<u64>,
+    pub conflict_edges: Vec<DependencyEdge>,
+    pub gap_edges: Vec<DependencyEdge>,
+    pub repair_task_ids: Vec<u64>,
+    pub final_artifact_refs: Vec<u64>,
+    pub report_ref: String,
+    pub acceptance_status: IntegrationStatus,
+}
+
+impl IntegrationReport {
+    pub fn accepted(
+        integration_group_id: u64,
+        included_task_ids: Vec<u64>,
+        final_artifact_refs: Vec<u64>,
+        report_ref: impl Into<String>,
+    ) -> Result<Self, LoomModelError> {
+        ensure_not_empty_collection("included_task_ids", &included_task_ids)?;
+        ensure_not_empty_collection("final_artifact_refs", &final_artifact_refs)?;
+        let report_ref = report_ref.into();
+        ensure_not_empty("report_ref", &report_ref)?;
+
+        Ok(Self {
+            integration_group_id,
+            included_task_ids,
+            excluded_task_ids: Vec::new(),
+            conflict_edges: Vec::new(),
+            gap_edges: Vec::new(),
+            repair_task_ids: Vec::new(),
+            final_artifact_refs,
+            report_ref,
+            acceptance_status: IntegrationStatus::Accepted,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntegrationStatus {
+    Accepted,
+    NeedsRepair,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoomModelError {
     EmptyField(&'static str),
     EmptyCollection(&'static str),
