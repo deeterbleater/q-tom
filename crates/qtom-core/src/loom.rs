@@ -215,6 +215,10 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut decommissioned_task_ids = HashSet::new();
 
     for event in events {
+        if matches!(event.event_type, LoomEventType::TaskAssigned) {
+            validate_assignment_route_decision(event, &replay_log)?;
+        }
+
         replay_log.append(event.clone())?;
         root_task_ids.insert(event.root_task_id);
 
@@ -264,6 +268,28 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     })
 }
 
+fn validate_assignment_route_decision(
+    event: &LoomEvent,
+    replay_log: &InMemoryEventLog,
+) -> Result<(), LoomEventError> {
+    let Some(causation_id) = event.causation_id else {
+        return Ok(());
+    };
+
+    let has_route_decision = replay_log
+        .events
+        .iter()
+        .any(|candidate| candidate.event_id == causation_id);
+
+    if !has_route_decision {
+        return Err(LoomEventError::MissingTaskRouteDecision {
+            task_id: event.task_id.unwrap_or_default(),
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReplayValidationReport {
     pub event_count: usize,
@@ -307,6 +333,9 @@ pub enum LoomEventError {
     MissingTaskDecommission {
         task_id: u64,
     },
+    MissingTaskRouteDecision {
+        task_id: u64,
+    },
 }
 
 impl std::fmt::Display for LoomEventError {
@@ -337,6 +366,9 @@ impl std::fmt::Display for LoomEventError {
             ),
             Self::MissingTaskDecommission { task_id } => {
                 write!(f, "completed task {task_id} is missing decommission event")
+            }
+            Self::MissingTaskRouteDecision { task_id } => {
+                write!(f, "assigned task {task_id} is missing route decision event")
             }
         }
     }

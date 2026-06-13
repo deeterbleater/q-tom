@@ -351,3 +351,29 @@ fn replay_validation_accepts_completed_task_with_decommission() {
     assert_eq!(report.completion_count, 1);
     assert_eq!(report.decommission_count, 1);
 }
+
+#[test]
+fn replay_validation_rejects_assignment_without_route_decision_in_slice() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        caused_by(event(LoomEventType::TaskAssigned, 2, 10), 99),
+    ];
+
+    let err = validate_events(&events).expect_err("assigned task should require route decision");
+
+    assert_eq!(err, LoomEventError::MissingTaskRouteDecision { task_id: 10 });
+}
+
+#[test]
+fn replay_validation_accepts_assignment_with_route_decision() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        event(LoomEventType::RouteDecisionRecorded, 2, 10),
+        caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2),
+    ];
+
+    let report = validate_events(&events).expect("assigned task has route decision");
+
+    assert_eq!(report.route_decision_count, 1);
+    assert_eq!(report.assignment_count, 1);
+}
