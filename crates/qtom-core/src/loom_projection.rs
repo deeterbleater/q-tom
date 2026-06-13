@@ -173,6 +173,84 @@ pub fn artifact_provenance_projection(log: &InMemoryEventLog) -> String {
     output
 }
 
+pub fn integration_group_projection(log: &InMemoryEventLog) -> String {
+    let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
+    let task_events = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::TaskCreated)
+        .collect::<Vec<_>>();
+    let child_task_ids_by_parent = task_events
+        .iter()
+        .filter_map(|event| Some((event.task_id?, event.parent_task_id?)))
+        .fold(
+            HashMap::<u64, Vec<u64>>::new(),
+            |mut map, (task, parent)| {
+                map.entry(parent).or_default().push(task);
+                map
+            },
+        );
+    let group_events = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::IntegrationRequested)
+        .filter(|event| is_integration_group_ref(event.payload_ref.as_str()))
+        .collect::<Vec<_>>();
+    let report_events_by_group_id = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::IntegrationRequested)
+        .filter(|event| is_integration_report_ref(event.payload_ref.as_str()))
+        .map(|event| (ref_tail(event.payload_ref.as_str()).to_string(), event))
+        .collect::<HashMap<_, _>>();
+
+    let mut output = String::from("flowchart TD\n");
+
+    for group_event in group_events {
+        let Some(parent_task_id) = group_event.task_id else {
+            continue;
+        };
+        let group_id = ref_tail(group_event.payload_ref.as_str());
+        let parent_node = format!("task_{parent_task_id}");
+        let group_node = format!("integration_group_{}", group_event.event_id);
+
+        writeln!(output, "  {parent_node}[\"Task {parent_task_id}\"]")
+            .expect("writing to String should not fail");
+        writeln!(output, "  {group_node}[\"IntegrationGroup {group_id}\"]")
+            .expect("writing to String should not fail");
+        writeln!(output, "  {parent_node} --> {group_node}")
+            .expect("writing to String should not fail");
+
+        if let Some(child_task_ids) = child_task_ids_by_parent.get(&parent_task_id) {
+            for child_task_id in child_task_ids {
+                let child_node = format!("task_{child_task_id}");
+                writeln!(output, "  {child_node}[\"Task {child_task_id}\"]")
+                    .expect("writing to String should not fail");
+                writeln!(output, "  {child_node} --> {group_node}")
+                    .expect("writing to String should not fail");
+            }
+        }
+
+        if let Some(report_event) = report_events_by_group_id.get(group_id) {
+            let report_node = format!("integration_report_{}", report_event.event_id);
+            writeln!(output, "  {report_node}[\"IntegrationReport {group_id}\"]")
+                .expect("writing to String should not fail");
+            writeln!(output, "  {group_node} --> {report_node}")
+                .expect("writing to String should not fail");
+
+            if let Some(agent_id) = report_event.agent_id {
+                let agent_node = format!("agent_{agent_id}");
+                writeln!(output, "  {agent_node}[\"Agent {agent_id}\"]")
+                    .expect("writing to String should not fail");
+                writeln!(output, "  {report_node} --> {agent_node}")
+                    .expect("writing to String should not fail");
+            }
+        }
+    }
+
+    output
+}
+
 pub fn memory_lineage_projection(log: &InMemoryEventLog) -> String {
     let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
     let decommission_events = events
@@ -233,4 +311,12 @@ fn ref_tail(payload_ref: &str) -> &str {
         .next()
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown")
+}
+
+fn is_integration_group_ref(payload_ref: &str) -> bool {
+    payload_ref.contains("/integration/group/")
+}
+
+fn is_integration_report_ref(payload_ref: &str) -> bool {
+    payload_ref.contains("/integration/report/")
 }

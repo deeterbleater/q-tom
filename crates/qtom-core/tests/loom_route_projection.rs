@@ -1,6 +1,6 @@
 use qtom_core::{
-    MockTaskLoom, artifact_provenance_projection, memory_lineage_projection,
-    route_trace_projection, task_dependency_projection,
+    MockTaskLoom, artifact_provenance_projection, integration_group_projection,
+    memory_lineage_projection, route_trace_projection, task_dependency_projection,
 };
 
 #[test]
@@ -80,4 +80,26 @@ fn artifact_provenance_projection_is_derived_from_artifact_events() {
     assert!(projection.contains("task_1001 --> artifact_declared_2010"));
     assert!(projection.contains("artifact_declared_2010 --> artifact_ready_2011"));
     assert!(projection.contains("artifact_ready_2011 --> agent_10001"));
+}
+
+#[test]
+fn integration_group_projection_is_derived_from_task_and_integration_events() {
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+
+    let projection = integration_group_projection(&output.event_log);
+
+    assert!(projection.starts_with("flowchart TD\n"));
+    assert!(projection.contains("task_10[\"Task 10\"]"));
+    assert!(projection.contains("task_1000[\"Task 1000\"]"));
+    assert!(projection.contains("task_1001[\"Task 1001\"]"));
+    assert!(projection.contains("integration_group_10[\"IntegrationGroup 1\"]"));
+    assert!(projection.contains("integration_report_3000[\"IntegrationReport 1\"]"));
+    assert!(projection.contains("agent_700[\"Agent 700\"]"));
+    assert!(projection.contains("task_10 --> integration_group_10"));
+    assert!(projection.contains("task_1000 --> integration_group_10"));
+    assert!(projection.contains("task_1001 --> integration_group_10"));
+    assert!(projection.contains("integration_group_10 --> integration_report_3000"));
+    assert!(projection.contains("integration_report_3000 --> agent_700"));
 }
