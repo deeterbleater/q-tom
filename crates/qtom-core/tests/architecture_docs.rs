@@ -331,6 +331,35 @@ fn realization_plan_covers_execution_path() {
 }
 
 #[test]
+fn local_agent_readiness_covers_runtime_gate() {
+    let readiness_path = repo_root().join("docs/local-agent-readiness.md");
+    let readiness = fs::read_to_string(&readiness_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", readiness_path.display()));
+    let readiness = readiness.to_lowercase();
+
+    let required_terms = [
+        "agentruntime",
+        "hydratedcontext",
+        "mock runtime",
+        "default test runtime",
+        "network access",
+        "ci",
+        "disabled",
+        "ignored tests",
+        "evaluator fixture",
+        "versioned",
+        "qwen3-2507",
+    ];
+
+    for term in required_terms {
+        assert!(
+            readiness.contains(term),
+            "local-agent readiness doc should include `{term}`"
+        );
+    }
+}
+
+#[test]
 fn architecture_doc_consolidates_outline() {
     let architecture_path = repo_root().join("docs/architecture.md");
     let architecture = fs::read_to_string(&architecture_path)
@@ -375,6 +404,7 @@ fn architecture_doc_consolidates_outline() {
         "docs/topology-governance.md",
         "docs/mvp-roadmap.md",
         "docs/realization-plan.md",
+        "docs/local-agent-readiness.md",
     ];
 
     for doc in supporting_docs {

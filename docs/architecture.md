@@ -29,6 +29,7 @@ Supporting docs:
 - `docs/topology-governance.md`
 - `docs/mvp-roadmap.md`
 - `docs/realization-plan.md`
+- `docs/local-agent-readiness.md`
 
 ## 2. Problem Statement
 
