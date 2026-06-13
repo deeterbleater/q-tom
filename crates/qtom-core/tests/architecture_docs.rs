@@ -360,6 +360,37 @@ fn local_agent_readiness_covers_runtime_gate() {
 }
 
 #[test]
+fn mvp_review_gate_covers_exit_decision() {
+    let review_path = repo_root().join("docs/mvp-review-gate.md");
+    let review = fs::read_to_string(&review_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", review_path.display()));
+    let review = review.to_lowercase();
+
+    let required_terms = [
+        "replay validation",
+        "route decisions",
+        "constructor tasks",
+        "decommission packets",
+        "memory nodes",
+        "task dependency",
+        "memory lineage",
+        "hard constraints",
+        "go decision",
+        "no-go decision",
+        "reshape",
+        "scrap",
+        "real local agents",
+    ];
+
+    for term in required_terms {
+        assert!(
+            review.contains(term),
+            "mvp review gate doc should include `{term}`"
+        );
+    }
+}
+
+#[test]
 fn architecture_doc_consolidates_outline() {
     let architecture_path = repo_root().join("docs/architecture.md");
     let architecture = fs::read_to_string(&architecture_path)
@@ -405,6 +436,7 @@ fn architecture_doc_consolidates_outline() {
         "docs/mvp-roadmap.md",
         "docs/realization-plan.md",
         "docs/local-agent-readiness.md",
+        "docs/mvp-review-gate.md",
     ];
 
     for doc in supporting_docs {

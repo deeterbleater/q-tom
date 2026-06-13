@@ -30,6 +30,7 @@ Supporting docs:
 - `docs/mvp-roadmap.md`
 - `docs/realization-plan.md`
 - `docs/local-agent-readiness.md`
+- `docs/mvp-review-gate.md`
 
 ## 2. Problem Statement
 
