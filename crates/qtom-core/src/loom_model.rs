@@ -241,6 +241,97 @@ pub enum IntegrationStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentDecommissionPacket {
+    pub packet_id: u64,
+    pub agent_id: u64,
+    pub root_task_id: u64,
+    pub task_id: u64,
+    pub prompt_id: u64,
+    pub plan_id: u64,
+    pub final_status: String,
+    pub deliverable_refs: Vec<u64>,
+    pub self_summary_ref: String,
+}
+
+impl AgentDecommissionPacket {
+    #[allow(clippy::too_many_arguments)]
+    pub fn completed(
+        packet_id: u64,
+        agent_id: u64,
+        root_task_id: u64,
+        task_id: u64,
+        prompt_id: u64,
+        plan_id: u64,
+        deliverable_refs: Vec<u64>,
+        self_summary_ref: impl Into<String>,
+    ) -> Result<Self, LoomModelError> {
+        ensure_not_empty_collection("deliverable_refs", &deliverable_refs)?;
+        let self_summary_ref = self_summary_ref.into();
+        ensure_not_empty("self_summary_ref", &self_summary_ref)?;
+
+        Ok(Self {
+            packet_id,
+            agent_id,
+            root_task_id,
+            task_id,
+            prompt_id,
+            plan_id,
+            final_status: "completed".to_string(),
+            deliverable_refs,
+            self_summary_ref,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryNode {
+    pub memory_node_id: u64,
+    pub kind: MemoryNodeKind,
+    pub root_task_id: u64,
+    pub task_id: u64,
+    pub packet_id: u64,
+    pub evidence_refs: Vec<String>,
+    pub summary: String,
+}
+
+impl MemoryNode {
+    pub fn from_packet(
+        memory_node_id: u64,
+        kind: MemoryNodeKind,
+        root_task_id: u64,
+        task_id: u64,
+        packet_id: u64,
+        evidence_refs: Vec<String>,
+        summary: impl Into<String>,
+    ) -> Result<Self, LoomModelError> {
+        ensure_not_empty_collection("evidence_refs", &evidence_refs)?;
+        let summary = summary.into();
+        ensure_not_empty("summary", &summary)?;
+
+        Ok(Self {
+            memory_node_id,
+            kind,
+            root_task_id,
+            task_id,
+            packet_id,
+            evidence_refs,
+            summary,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryNodeKind {
+    Episode,
+    Decision,
+    Artifact,
+    Heuristic,
+    Failure,
+    Preference,
+    OpenLoop,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoomModelError {
     EmptyField(&'static str),
     EmptyCollection(&'static str),

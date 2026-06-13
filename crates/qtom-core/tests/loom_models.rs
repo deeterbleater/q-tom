@@ -1,6 +1,7 @@
 use qtom_core::{
-    ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup, IntegrationReport,
-    IntegrationStatus, JoinPolicy, LoomModelError, PlanNode, TaskEnvelope,
+    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup,
+    IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
+    PlanNode, TaskEnvelope,
 };
 
 #[test]
@@ -151,4 +152,83 @@ fn accepted_integration_report_requires_included_tasks() {
         .expect_err("accepted report should require included children");
 
     assert_eq!(err, LoomModelError::EmptyCollection("included_task_ids"));
+}
+
+#[test]
+fn decommission_packet_preserves_task_agent_plan_and_artifact_lineage() {
+    let packet = AgentDecommissionPacket::completed(
+        1_200,
+        301,
+        1,
+        11,
+        7,
+        42,
+        vec![900],
+        "inline://summary/1200",
+    )
+    .expect("decommission packet should be valid");
+
+    assert_eq!(packet.packet_id, 1_200);
+    assert_eq!(packet.agent_id, 301);
+    assert_eq!(packet.root_task_id, 1);
+    assert_eq!(packet.task_id, 11);
+    assert_eq!(packet.prompt_id, 7);
+    assert_eq!(packet.plan_id, 42);
+    assert_eq!(packet.deliverable_refs, vec![900]);
+    assert_eq!(packet.final_status, "completed");
+}
+
+#[test]
+fn decommission_packet_requires_deliverable_refs() {
+    let err = AgentDecommissionPacket::completed(
+        1_200,
+        301,
+        1,
+        11,
+        7,
+        42,
+        vec![],
+        "inline://summary/1200",
+    )
+    .expect_err("completed packet should require deliverables");
+
+    assert_eq!(err, LoomModelError::EmptyCollection("deliverable_refs"));
+}
+
+#[test]
+fn memory_node_preserves_packet_evidence() {
+    let node = MemoryNode::from_packet(
+        1_500,
+        MemoryNodeKind::Episode,
+        1,
+        11,
+        1_200,
+        vec!["inline://summary/1200".to_string()],
+        "completed constructor task",
+    )
+    .expect("memory node should be valid");
+
+    assert_eq!(node.memory_node_id, 1_500);
+    assert_eq!(node.kind, MemoryNodeKind::Episode);
+    assert_eq!(node.root_task_id, 1);
+    assert_eq!(node.task_id, 11);
+    assert_eq!(node.packet_id, 1_200);
+    assert_eq!(node.evidence_refs, vec!["inline://summary/1200"]);
+    assert_eq!(node.summary, "completed constructor task");
+}
+
+#[test]
+fn memory_node_requires_evidence_refs() {
+    let err = MemoryNode::from_packet(
+        1_500,
+        MemoryNodeKind::Episode,
+        1,
+        11,
+        1_200,
+        vec![],
+        "completed constructor task",
+    )
+    .expect_err("memory node should require evidence refs");
+
+    assert_eq!(err, LoomModelError::EmptyCollection("evidence_refs"));
 }

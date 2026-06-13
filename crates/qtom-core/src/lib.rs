@@ -30,8 +30,9 @@ pub use loom_mock::{
     MockDirector, MockDirectorConfig, MockIntegration, MockIntegrationConfig,
 };
 pub use loom_model::{
-    ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup, IntegrationReport,
-    IntegrationStatus, JoinPolicy, LoomModelError, PlanNode, TaskEnvelope,
+    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup,
+    IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
+    PlanNode, TaskEnvelope,
 };
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
