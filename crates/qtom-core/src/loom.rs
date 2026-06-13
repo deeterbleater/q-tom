@@ -28,8 +28,58 @@ impl LoomEvent {
             return Err(LoomEventError::MissingPayloadRef);
         }
 
+        self.validate_required_fields()?;
+
         Ok(())
     }
+
+    fn validate_required_fields(&self) -> Result<(), LoomEventError> {
+        if requires_task_id(self.event_type) && self.task_id.is_none() {
+            return Err(LoomEventError::MissingRequiredField {
+                event_type: self.event_type,
+                field: "task_id",
+            });
+        }
+
+        if requires_agent_id(self.event_type) && self.agent_id.is_none() {
+            return Err(LoomEventError::MissingRequiredField {
+                event_type: self.event_type,
+                field: "agent_id",
+            });
+        }
+
+        if requires_topology_snapshot_id(self.event_type) && self.topology_snapshot_id.is_none() {
+            return Err(LoomEventError::MissingRequiredField {
+                event_type: self.event_type,
+                field: "topology_snapshot_id",
+            });
+        }
+
+        Ok(())
+    }
+}
+
+fn requires_task_id(event_type: LoomEventType) -> bool {
+    matches!(
+        event_type,
+        LoomEventType::TaskCreated
+            | LoomEventType::TaskAssigned
+            | LoomEventType::TaskBlocked
+            | LoomEventType::TaskResumed
+            | LoomEventType::TaskCompleted
+            | LoomEventType::RouteDecisionRecorded
+    )
+}
+
+fn requires_agent_id(event_type: LoomEventType) -> bool {
+    matches!(event_type, LoomEventType::AgentDecommissioned)
+}
+
+fn requires_topology_snapshot_id(event_type: LoomEventType) -> bool {
+    matches!(
+        event_type,
+        LoomEventType::RouteDecisionRecorded | LoomEventType::TopologyCommitted
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -162,6 +212,10 @@ pub enum LoomEventError {
     DuplicateEventId(u64),
     MissingPayloadSchema,
     MissingPayloadRef,
+    MissingRequiredField {
+        event_type: LoomEventType,
+        field: &'static str,
+    },
     MissingRequiredCausation(LoomEventType),
     UnknownCausationId(u64),
     InvalidCausationType {
@@ -180,6 +234,9 @@ impl std::fmt::Display for LoomEventError {
             }
             Self::MissingPayloadSchema => write!(f, "loom event payload schema is required"),
             Self::MissingPayloadRef => write!(f, "loom event payload ref is required"),
+            Self::MissingRequiredField { event_type, field } => {
+                write!(f, "loom event {event_type:?} requires {field}")
+            }
             Self::MissingRequiredCausation(event_type) => {
                 write!(f, "loom event {event_type:?} requires causation")
             }

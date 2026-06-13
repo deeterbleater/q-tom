@@ -176,3 +176,61 @@ fn unknown_causation_id_is_rejected() {
 
     assert_eq!(err, LoomEventError::UnknownCausationId(999));
 }
+
+#[test]
+fn task_scoped_events_require_task_id() {
+    let mut invalid = event(LoomEventType::TaskCreated, 1, 10);
+    invalid.task_id = None;
+
+    let err = InMemoryEventLog::new()
+        .append(invalid)
+        .expect_err("task_created should require task id");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingRequiredField {
+            event_type: LoomEventType::TaskCreated,
+            field: "task_id",
+        }
+    );
+}
+
+#[test]
+fn agent_decommissioned_requires_agent_id() {
+    let mut invalid = event(LoomEventType::AgentDecommissioned, 1, 10);
+    invalid.agent_id = None;
+
+    let err = InMemoryEventLog::new()
+        .append(invalid)
+        .expect_err("agent_decommissioned should require agent id");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingRequiredField {
+            event_type: LoomEventType::AgentDecommissioned,
+            field: "agent_id",
+        }
+    );
+}
+
+#[test]
+fn topology_committed_requires_snapshot_id() {
+    let mut log = InMemoryEventLog::new();
+    log.append(event(LoomEventType::TopologyProposed, 1, 0))
+        .expect("topology_proposed should append");
+
+    let mut invalid = caused_by(event(LoomEventType::TopologyCommitted, 2, 0), 1);
+    invalid.topology_snapshot_id = None;
+
+    let err = log
+        .append(invalid)
+        .expect_err("topology_committed should require topology snapshot id");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingRequiredField {
+            event_type: LoomEventType::TopologyCommitted,
+            field: "topology_snapshot_id",
+        }
+    );
+}
