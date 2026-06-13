@@ -271,7 +271,7 @@ fn replay_validation_reports_lifecycle_counts() {
     log.append(decommissioned)
         .expect("agent_decommissioned should append");
 
-    log.append(event(LoomEventType::MemoryNodeCreated, 6, 10))
+    log.append(caused_by(event(LoomEventType::MemoryNodeCreated, 6, 10), 5))
         .expect("memory_node_created should append");
     log.append(event(LoomEventType::TopologyProposed, 7, 0))
         .expect("topology_proposed should append");
@@ -376,4 +376,32 @@ fn replay_validation_accepts_assignment_with_route_decision() {
 
     assert_eq!(report.route_decision_count, 1);
     assert_eq!(report.assignment_count, 1);
+}
+
+#[test]
+fn replay_validation_rejects_memory_node_without_evidence() {
+    let events = vec![event(LoomEventType::MemoryNodeCreated, 1, 10)];
+
+    let err = validate_events(&events).expect_err("memory node should require evidence");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingMemoryEvidence { event_id: 1 }
+    );
+}
+
+#[test]
+fn replay_validation_accepts_memory_node_with_decommission_evidence() {
+    let mut decommissioned = event(LoomEventType::AgentDecommissioned, 1, 10);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        decommissioned,
+        caused_by(event(LoomEventType::MemoryNodeCreated, 2, 10), 1),
+    ];
+
+    let report = validate_events(&events).expect("memory node has evidence");
+
+    assert_eq!(report.decommission_count, 1);
+    assert_eq!(report.memory_node_count, 1);
 }

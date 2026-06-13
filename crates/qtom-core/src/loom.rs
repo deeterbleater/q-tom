@@ -219,6 +219,10 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             validate_assignment_route_decision(event, &replay_log)?;
         }
 
+        if matches!(event.event_type, LoomEventType::MemoryNodeCreated) {
+            validate_memory_evidence(event, &replay_log)?;
+        }
+
         replay_log.append(event.clone())?;
         root_task_ids.insert(event.root_task_id);
 
@@ -266,6 +270,30 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         memory_node_count,
         topology_commit_count,
     })
+}
+
+fn validate_memory_evidence(
+    event: &LoomEvent,
+    replay_log: &InMemoryEventLog,
+) -> Result<(), LoomEventError> {
+    let Some(causation_id) = event.causation_id else {
+        return Err(LoomEventError::MissingMemoryEvidence {
+            event_id: event.event_id,
+        });
+    };
+
+    let has_decommission_evidence = replay_log.events.iter().any(|candidate| {
+        candidate.event_id == causation_id
+            && candidate.event_type == LoomEventType::AgentDecommissioned
+    });
+
+    if !has_decommission_evidence {
+        return Err(LoomEventError::MissingMemoryEvidence {
+            event_id: event.event_id,
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_assignment_route_decision(
@@ -336,6 +364,9 @@ pub enum LoomEventError {
     MissingTaskRouteDecision {
         task_id: u64,
     },
+    MissingMemoryEvidence {
+        event_id: u64,
+    },
 }
 
 impl std::fmt::Display for LoomEventError {
@@ -369,6 +400,9 @@ impl std::fmt::Display for LoomEventError {
             }
             Self::MissingTaskRouteDecision { task_id } => {
                 write!(f, "assigned task {task_id} is missing route decision event")
+            }
+            Self::MissingMemoryEvidence { event_id } => {
+                write!(f, "memory node event {event_id} is missing evidence")
             }
         }
     }
