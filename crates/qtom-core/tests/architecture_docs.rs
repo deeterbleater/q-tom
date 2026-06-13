@@ -160,3 +160,35 @@ fn event_vocabulary_covers_replay_events() {
         );
     }
 }
+
+#[test]
+fn lifecycle_flows_cover_main_system_paths() {
+    let flows_path = repo_root().join("docs/lifecycle-flows.md");
+    let flows = fs::read_to_string(&flows_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", flows_path.display()));
+    let flows = flows.to_lowercase();
+
+    let required_flows = [
+        "root prompt flow",
+        "task decomposition flow",
+        "constructor execution flow",
+        "integration flow",
+        "decommission flow",
+        "memory curation flow",
+        "route-decision flow",
+        "topology-update flow",
+    ];
+
+    for flow in required_flows {
+        assert!(flows.contains(flow), "lifecycle flows should cover `{flow}`");
+    }
+
+    let required_flow_terms = ["ordered trace", "emitted events", "diagram", "replay"];
+
+    for term in required_flow_terms {
+        assert!(
+            flows.contains(term),
+            "lifecycle flows should include `{term}` guidance"
+        );
+    }
+}
