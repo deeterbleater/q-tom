@@ -88,6 +88,8 @@ impl InMemoryEventLog {
             return Err(LoomEventError::DuplicateEventId(event.event_id));
         }
 
+        self.validate_causation(&event)?;
+
         self.event_ids.insert(event.event_id);
         self.events.push(event);
         Ok(())
@@ -116,6 +118,43 @@ impl InMemoryEventLog {
             .filter(|event| event.event_type == event_type)
             .collect()
     }
+
+    fn validate_causation(&self, event: &LoomEvent) -> Result<(), LoomEventError> {
+        let Some(expected_cause) = required_cause(event.event_type) else {
+            return Ok(());
+        };
+
+        let Some(causation_id) = event.causation_id else {
+            return Err(LoomEventError::MissingRequiredCausation(event.event_type));
+        };
+
+        let causation_event = self
+            .events
+            .iter()
+            .find(|candidate| candidate.event_id == causation_id)
+            .ok_or(LoomEventError::UnknownCausationId(causation_id))?;
+
+        if causation_event.event_type != expected_cause {
+            return Err(LoomEventError::InvalidCausationType {
+                event_type: event.event_type,
+                causation_id,
+                expected: expected_cause,
+                actual: causation_event.event_type,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+fn required_cause(event_type: LoomEventType) -> Option<LoomEventType> {
+    match event_type {
+        LoomEventType::TaskAssigned => Some(LoomEventType::RouteDecisionRecorded),
+        LoomEventType::ArtifactReady => Some(LoomEventType::ArtifactDeclared),
+        LoomEventType::TaskResumed => Some(LoomEventType::TaskBlocked),
+        LoomEventType::TopologyCommitted => Some(LoomEventType::TopologyProposed),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +162,14 @@ pub enum LoomEventError {
     DuplicateEventId(u64),
     MissingPayloadSchema,
     MissingPayloadRef,
+    MissingRequiredCausation(LoomEventType),
+    UnknownCausationId(u64),
+    InvalidCausationType {
+        event_type: LoomEventType,
+        causation_id: u64,
+        expected: LoomEventType,
+        actual: LoomEventType,
+    },
 }
 
 impl std::fmt::Display for LoomEventError {
@@ -133,6 +180,21 @@ impl std::fmt::Display for LoomEventError {
             }
             Self::MissingPayloadSchema => write!(f, "loom event payload schema is required"),
             Self::MissingPayloadRef => write!(f, "loom event payload ref is required"),
+            Self::MissingRequiredCausation(event_type) => {
+                write!(f, "loom event {event_type:?} requires causation")
+            }
+            Self::UnknownCausationId(event_id) => {
+                write!(f, "loom event causation id {event_id} does not exist")
+            }
+            Self::InvalidCausationType {
+                event_type,
+                causation_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "loom event {event_type:?} causation id {causation_id} should reference {expected:?}, got {actual:?}"
+            ),
         }
     }
 }

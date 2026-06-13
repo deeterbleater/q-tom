@@ -16,9 +16,14 @@ fn event(event_type: LoomEventType, event_id: u64, task_id: u64) -> LoomEvent {
         payload_schema: "test.payload.v1".to_string(),
         payload_ref: format!("inline://event/{event_id}"),
         occurred_at_ms: 1_000 + event_id,
-        causation_id: event_id.checked_sub(1),
+        causation_id: None,
         correlation_id: 99,
     }
+}
+
+fn caused_by(mut event: LoomEvent, causation_id: u64) -> LoomEvent {
+    event.causation_id = Some(causation_id);
+    event
 }
 
 #[test]
@@ -29,7 +34,7 @@ fn event_log_appends_and_replays_in_order() {
         .expect("first event should append");
     log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
         .expect("second event should append");
-    log.append(event(LoomEventType::TaskAssigned, 3, 10))
+    log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("third event should append");
 
     let replayed: Vec<_> = log.replay(ReplayCursor::start()).collect();
@@ -97,7 +102,7 @@ fn replay_cursor_starts_after_seen_events() {
         .expect("first event should append");
     log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
         .expect("second event should append");
-    log.append(event(LoomEventType::TaskAssigned, 3, 10))
+    log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("third event should append");
 
     let replayed: Vec<_> = log.replay(ReplayCursor::after(2)).collect();
@@ -106,4 +111,68 @@ fn replay_cursor_starts_after_seen_events() {
         replayed.iter().map(|event| event.event_id).collect::<Vec<_>>(),
         vec![3]
     );
+}
+
+#[test]
+fn task_assignment_requires_route_decision_cause() {
+    let mut log = InMemoryEventLog::new();
+
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+
+    let err = log
+        .append(caused_by(event(LoomEventType::TaskAssigned, 2, 10), 1))
+        .expect_err("task_assigned should require route decision causation");
+
+    assert_eq!(
+        err,
+        LoomEventError::InvalidCausationType {
+            event_type: LoomEventType::TaskAssigned,
+            causation_id: 1,
+            expected: LoomEventType::RouteDecisionRecorded,
+            actual: LoomEventType::TaskCreated,
+        }
+    );
+}
+
+#[test]
+fn task_assignment_accepts_route_decision_cause() {
+    let mut log = InMemoryEventLog::new();
+
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+        .expect("route_decision_recorded should append");
+    log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
+        .expect("task_assigned should accept route decision causation");
+}
+
+#[test]
+fn artifact_ready_requires_artifact_declared_cause() {
+    let mut log = InMemoryEventLog::new();
+
+    let err = log
+        .append(event(LoomEventType::ArtifactReady, 2, 10))
+        .expect_err("artifact_ready should require causation");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingRequiredCausation(LoomEventType::ArtifactReady)
+    );
+
+    log.append(event(LoomEventType::ArtifactDeclared, 1, 10))
+        .expect("artifact_declared should append");
+    log.append(caused_by(event(LoomEventType::ArtifactReady, 2, 10), 1))
+        .expect("artifact_ready should accept artifact_declared causation");
+}
+
+#[test]
+fn unknown_causation_id_is_rejected() {
+    let mut log = InMemoryEventLog::new();
+
+    let err = log
+        .append(caused_by(event(LoomEventType::TaskAssigned, 2, 10), 999))
+        .expect_err("unknown causation should fail");
+
+    assert_eq!(err, LoomEventError::UnknownCausationId(999));
 }
