@@ -1,6 +1,7 @@
 use qtom_core::{
     MockTaskLoom, artifact_provenance_projection, integration_group_projection,
-    memory_lineage_projection, route_trace_projection, task_dependency_projection,
+    loom_projection_bundle, memory_lineage_projection, route_trace_projection,
+    task_dependency_projection,
 };
 
 #[test]
@@ -102,4 +103,43 @@ fn integration_group_projection_is_derived_from_task_and_integration_events() {
     assert!(projection.contains("task_1001 --> integration_group_10"));
     assert!(projection.contains("integration_group_10 --> integration_report_3000"));
     assert!(projection.contains("integration_report_3000 --> agent_700"));
+}
+
+#[test]
+fn projection_bundle_contains_all_current_replay_views() {
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+
+    let bundle = loom_projection_bundle(&output.event_log);
+
+    assert!(bundle.task_dependency.contains("task_10 --> task_1000"));
+    assert!(bundle.route_trace.contains("route_100 --> assignment_101"));
+    assert!(
+        bundle
+            .artifact_provenance
+            .contains("artifact_declared_2000 --> artifact_ready_2001")
+    );
+    assert!(
+        bundle
+            .integration_group
+            .contains("integration_group_10 --> integration_report_3000")
+    );
+    assert!(
+        bundle
+            .memory_lineage
+            .contains("decommission_2003 --> memory_4000")
+    );
+}
+
+#[test]
+fn projection_bundle_is_stable_for_same_replayed_log() {
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+
+    let first = loom_projection_bundle(&output.event_log);
+    let second = loom_projection_bundle(&output.event_log);
+
+    assert_eq!(first, second);
 }

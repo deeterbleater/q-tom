@@ -4,6 +4,25 @@ use std::fmt::Write;
 
 use crate::{InMemoryEventLog, LoomEvent, LoomEventType, ReplayCursor};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoomProjectionBundle {
+    pub task_dependency: String,
+    pub route_trace: String,
+    pub artifact_provenance: String,
+    pub integration_group: String,
+    pub memory_lineage: String,
+}
+
+pub fn loom_projection_bundle(log: &InMemoryEventLog) -> LoomProjectionBundle {
+    LoomProjectionBundle {
+        task_dependency: task_dependency_projection(log),
+        route_trace: route_trace_projection(log),
+        artifact_provenance: artifact_provenance_projection(log),
+        integration_group: integration_group_projection(log),
+        memory_lineage: memory_lineage_projection(log),
+    }
+}
+
 pub fn route_trace_projection(log: &InMemoryEventLog) -> String {
     let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
     let route_events = events
