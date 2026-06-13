@@ -169,6 +169,10 @@ impl InMemoryEventLog {
             .collect()
     }
 
+    pub fn validate_replay(&self) -> Result<ReplayValidationReport, LoomEventError> {
+        validate_events(&self.events)
+    }
+
     fn validate_causation(&self, event: &LoomEvent) -> Result<(), LoomEventError> {
         let Some(expected_cause) = required_cause(event.event_type) else {
             return Ok(());
@@ -195,6 +199,34 @@ impl InMemoryEventLog {
 
         Ok(())
     }
+}
+
+pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, LoomEventError> {
+    let mut replay_log = InMemoryEventLog::new();
+    let mut root_task_ids = HashSet::new();
+    let mut task_event_count = 0;
+
+    for event in events {
+        replay_log.append(event.clone())?;
+        root_task_ids.insert(event.root_task_id);
+
+        if event.task_id.is_some() {
+            task_event_count += 1;
+        }
+    }
+
+    Ok(ReplayValidationReport {
+        event_count: events.len(),
+        root_task_count: root_task_ids.len(),
+        task_event_count,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayValidationReport {
+    pub event_count: usize,
+    pub root_task_count: usize,
+    pub task_event_count: usize,
 }
 
 fn required_cause(event_type: LoomEventType) -> Option<LoomEventType> {

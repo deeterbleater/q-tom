@@ -18,7 +18,10 @@ pub use config::ProjectConfig;
 pub use cpu_router::CpuRouter;
 pub use fixtures::{Fixture, FixtureConfig, generate_fixture};
 pub use golden::{GoldenFixture, GoldenFixtureError, read_golden_fixture, write_golden_fixture};
-pub use loom::{InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor};
+pub use loom::{
+    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
+    ReplayValidationReport, validate_events,
+};
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
 pub use score::{ScoreCoefficients, score_agent};

@@ -1,5 +1,5 @@
 use qtom_core::{
-    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
+    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor, validate_events,
 };
 
 fn event(event_type: LoomEventType, event_id: u64, task_id: u64) -> LoomEvent {
@@ -231,6 +231,56 @@ fn topology_committed_requires_snapshot_id() {
         LoomEventError::MissingRequiredField {
             event_type: LoomEventType::TopologyCommitted,
             field: "topology_snapshot_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_reports_event_counts() {
+    let mut log = InMemoryEventLog::new();
+
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+        .expect("route_decision_recorded should append");
+    log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
+        .expect("task_assigned should append");
+
+    let report = log.validate_replay().expect("replay should validate");
+
+    assert_eq!(report.event_count, 3);
+    assert_eq!(report.root_task_count, 1);
+    assert_eq!(report.task_event_count, 3);
+}
+
+#[test]
+fn replay_validation_rejects_duplicate_ids_in_slice() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        event(LoomEventType::TaskCreated, 1, 11),
+    ];
+
+    let err = validate_events(&events).expect_err("duplicate ids should fail replay validation");
+
+    assert_eq!(err, LoomEventError::DuplicateEventId(1));
+}
+
+#[test]
+fn replay_validation_rejects_bad_causation_in_slice() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        caused_by(event(LoomEventType::TaskAssigned, 2, 10), 1),
+    ];
+
+    let err = validate_events(&events).expect_err("bad causation should fail replay validation");
+
+    assert_eq!(
+        err,
+        LoomEventError::InvalidCausationType {
+            event_type: LoomEventType::TaskAssigned,
+            causation_id: 1,
+            expected: LoomEventType::RouteDecisionRecorded,
+            actual: LoomEventType::TaskCreated,
         }
     );
 }
