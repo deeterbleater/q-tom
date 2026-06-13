@@ -6,6 +6,7 @@ pub mod golden;
 pub mod loom;
 pub mod loom_mock;
 pub mod loom_model;
+pub mod loom_projection;
 pub mod loom_route;
 pub mod metrics;
 pub mod route_table;
@@ -36,6 +37,7 @@ pub use loom_model::{
     IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
     PlanNode, TaskEnvelope,
 };
+pub use loom_projection::route_trace_projection;
 pub use loom_route::{
     RouteDecision, TaskRouteDecisionEventConfig, TaskRouteRequestConfig,
     build_route_request_from_task, route_decision_recorded_event, simulated_agents_for_requests,
