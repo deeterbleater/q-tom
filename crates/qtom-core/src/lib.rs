@@ -20,7 +20,8 @@ pub use fixtures::{Fixture, FixtureConfig, generate_fixture};
 pub use golden::{GoldenFixture, GoldenFixtureError, read_golden_fixture, write_golden_fixture};
 pub use loom::{
     InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
-    ReplayValidationReport, read_event_log_jsonl, validate_events, write_event_log_jsonl,
+    ReplayValidationReport, append_event_log_jsonl, read_event_log_jsonl, validate_events,
+    write_event_log_jsonl,
 };
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;

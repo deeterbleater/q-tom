@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
@@ -269,6 +269,45 @@ where
     }
 
     Ok(log)
+}
+
+pub fn append_event_log_jsonl<P>(path: P, event: &LoomEvent) -> Result<(), LoomEventError>
+where
+    P: AsRef<Path>,
+{
+    let mut log = if path.as_ref().exists() {
+        read_event_log_jsonl(path.as_ref())?
+    } else {
+        InMemoryEventLog::new()
+    };
+    log.append(event.clone())?;
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_ref())
+        .map_err(|source| LoomEventError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    let mut writer = BufWriter::new(file);
+
+    serde_json::to_writer(&mut writer, event).map_err(|source| LoomEventError::Json {
+        line: None,
+        source: source.to_string(),
+    })?;
+    writer
+        .write_all(b"\n")
+        .map_err(|source| LoomEventError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    writer.flush().map_err(|source| LoomEventError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
 }
 
 pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, LoomEventError> {

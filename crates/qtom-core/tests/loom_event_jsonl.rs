@@ -1,8 +1,8 @@
 use std::fs;
 
 use qtom_core::{
-    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor, read_event_log_jsonl,
-    write_event_log_jsonl,
+    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
+    append_event_log_jsonl, read_event_log_jsonl, write_event_log_jsonl,
 };
 
 fn temp_path(name: &str) -> std::path::PathBuf {
@@ -78,4 +78,46 @@ fn jsonl_read_validates_loaded_events() {
     fs::remove_file(&path).ok();
 
     assert_eq!(err, LoomEventError::DuplicateEventId(1));
+}
+
+#[test]
+fn jsonl_append_preserves_existing_events() {
+    let path = temp_path("append");
+    let mut log = InMemoryEventLog::new();
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+
+    write_event_log_jsonl(&path, log.replay(ReplayCursor::start()))
+        .expect("jsonl write should succeed");
+    append_event_log_jsonl(&path, &event(LoomEventType::RouteDecisionRecorded, 2, 10))
+        .expect("jsonl append should succeed");
+    let loaded = read_event_log_jsonl(&path).expect("jsonl read should succeed");
+    fs::remove_file(&path).ok();
+
+    let event_ids: Vec<_> = loaded
+        .replay(ReplayCursor::start())
+        .map(|event| event.event_id)
+        .collect();
+
+    assert_eq!(event_ids, vec![1, 2]);
+}
+
+#[test]
+fn jsonl_append_rejects_duplicate_without_changing_file() {
+    let path = temp_path("append-duplicate");
+    let mut log = InMemoryEventLog::new();
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+
+    write_event_log_jsonl(&path, log.replay(ReplayCursor::start()))
+        .expect("jsonl write should succeed");
+    let before = fs::read_to_string(&path).expect("jsonl fixture should exist");
+
+    let err = append_event_log_jsonl(&path, &event(LoomEventType::TaskCreated, 1, 11))
+        .expect_err("duplicate append should fail");
+    let after = fs::read_to_string(&path).expect("jsonl fixture should still exist");
+    fs::remove_file(&path).ok();
+
+    assert_eq!(err, LoomEventError::DuplicateEventId(1));
+    assert_eq!(after, before);
 }
