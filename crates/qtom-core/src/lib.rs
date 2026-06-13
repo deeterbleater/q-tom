@@ -35,7 +35,8 @@ pub use loom_mock::{
 pub use loom_model::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup,
     IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
-    PlanNode, TaskEnvelope,
+    PlanNode, TaskEnvelope, append_decommission_packet_jsonl, read_decommission_packets_jsonl,
+    write_decommission_packets_jsonl,
 };
 pub use loom_projection::route_trace_projection;
 pub use loom_route::{

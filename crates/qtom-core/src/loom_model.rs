@@ -259,7 +259,7 @@ pub enum IntegrationStatus {
     Rejected,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct AgentDecommissionPacket {
     pub packet_id: u64,
     pub agent_id: u64,
@@ -270,6 +270,136 @@ pub struct AgentDecommissionPacket {
     pub final_status: String,
     pub deliverable_refs: Vec<u64>,
     pub self_summary_ref: String,
+}
+
+pub fn write_decommission_packets_jsonl<'a, I, P>(path: P, packets: I) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a AgentDecommissionPacket>,
+    P: AsRef<Path>,
+{
+    let packets = packets.into_iter().collect::<Vec<_>>();
+    validate_unique_packet_ids(packets.iter().copied())?;
+
+    let file = File::create(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for packet in packets {
+        serde_json::to_writer(&mut writer, packet).map_err(|source| LoomModelError::Json {
+            line: None,
+            source: source.to_string(),
+        })?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| LoomModelError::Io {
+                path: path.as_ref().display().to_string(),
+                source: source.to_string(),
+            })?;
+    }
+
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+pub fn read_decommission_packets_jsonl<P>(
+    path: P,
+) -> Result<Vec<AgentDecommissionPacket>, LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let reader = BufReader::new(file);
+    let mut packets = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line.map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let packet: AgentDecommissionPacket =
+            serde_json::from_str(&line).map_err(|source| LoomModelError::Json {
+                line: Some(line_number),
+                source: source.to_string(),
+            })?;
+        packets.push(packet);
+    }
+
+    validate_unique_packet_ids(packets.iter())?;
+
+    Ok(packets)
+}
+
+pub fn append_decommission_packet_jsonl<P>(
+    path: P,
+    packet: &AgentDecommissionPacket,
+) -> Result<(), LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let mut packets = if path.as_ref().exists() {
+        read_decommission_packets_jsonl(path.as_ref())?
+    } else {
+        Vec::new()
+    };
+    packets.push(packet.clone());
+    validate_unique_packet_ids(packets.iter())?;
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_ref())
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    let mut writer = BufWriter::new(file);
+
+    serde_json::to_writer(&mut writer, packet).map_err(|source| LoomModelError::Json {
+        line: None,
+        source: source.to_string(),
+    })?;
+    writer
+        .write_all(b"\n")
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+fn validate_unique_packet_ids<'a, I>(packets: I) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a AgentDecommissionPacket>,
+{
+    let mut packet_ids = HashSet::new();
+
+    for packet in packets {
+        if !packet_ids.insert(packet.packet_id) {
+            return Err(LoomModelError::DuplicatePacketId(packet.packet_id));
+        }
+    }
+
+    Ok(())
 }
 
 impl AgentDecommissionPacket {
@@ -356,9 +486,18 @@ pub enum LoomModelError {
     EmptyCollection(&'static str),
     MissingTaskArtifact(u64),
     MissingRouteCandidate(u64),
+    DuplicatePacketId(u64),
     InvalidNumericField {
         field: &'static str,
         reason: &'static str,
+    },
+    Io {
+        path: String,
+        source: String,
+    },
+    Json {
+        line: Option<usize>,
+        source: String,
     },
 }
 
@@ -376,9 +515,22 @@ impl std::fmt::Display for LoomModelError {
                     "route result for task {task_id} has no available candidate"
                 )
             }
+            Self::DuplicatePacketId(packet_id) => {
+                write!(f, "duplicate decommission packet id {packet_id}")
+            }
             Self::InvalidNumericField { field, reason } => {
                 write!(f, "`{field}` {reason}")
             }
+            Self::Io { path, source } => {
+                write!(f, "decommission packet I/O failed at {path}: {source}")
+            }
+            Self::Json { line, source } => match line {
+                Some(line) => write!(
+                    f,
+                    "decommission packet JSONL parse failed at line {line}: {source}"
+                ),
+                None => write!(f, "decommission packet JSON encode failed: {source}"),
+            },
         }
     }
 }
@@ -400,3 +552,9 @@ fn ensure_not_empty_collection<T>(field: &'static str, values: &[T]) -> Result<(
         Ok(())
     }
 }
+use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
