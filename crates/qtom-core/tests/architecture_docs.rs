@@ -36,3 +36,43 @@ fn glossary_covers_roadmap_terms() {
         );
     }
 }
+
+#[test]
+fn system_boundaries_cover_architecture_layers() {
+    let boundaries_path = repo_root().join("docs/system-boundaries.md");
+    let boundaries = fs::read_to_string(&boundaries_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", boundaries_path.display()));
+    let boundaries = boundaries.to_lowercase();
+
+    let required_layers = [
+        "q-tom router",
+        "agent task loom",
+        "agent runtime",
+        "memory and curator layer",
+        "evaluation layer",
+        "governance layer",
+        "observability layer",
+    ];
+
+    for layer in required_layers {
+        assert!(
+            boundaries.contains(layer),
+            "system boundaries should describe ownership for `{layer}`"
+        );
+    }
+
+    let required_boundary_terms = [
+        "owns",
+        "does not own",
+        "interface",
+        "event contract",
+        "trait boundary",
+    ];
+
+    for term in required_boundary_terms {
+        assert!(
+            boundaries.contains(term),
+            "system boundaries should include boundary term `{term}`"
+        );
+    }
+}
