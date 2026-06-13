@@ -33,10 +33,10 @@ pub use loom_mock::{
     MockIntegration, MockIntegrationConfig, MockTaskLoom, MockTaskLoomOutput,
 };
 pub use loom_model::{
-    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
-    GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
-    LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
-    append_decommission_packet_jsonl, read_decommission_packets_jsonl,
+    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, EvaluationFixture,
+    EvaluatorConfig, GradientAxis, GradientSpace, IntegrationGroup, IntegrationReport,
+    IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement,
+    PlanNode, TaskEnvelope, append_decommission_packet_jsonl, read_decommission_packets_jsonl,
     write_decommission_packets_jsonl,
 };
 pub use loom_projection::{memory_lineage_projection, route_trace_projection};

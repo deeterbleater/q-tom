@@ -579,6 +579,86 @@ pub struct MemoryPlacement {
     pub placement_evidence_ref: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvaluatorConfig {
+    pub model: String,
+    pub rubric_version: String,
+    pub prompt_version: String,
+    pub scoring_schema_version: String,
+    pub temperature: f32,
+    pub seed: Option<u64>,
+}
+
+impl EvaluatorConfig {
+    pub fn new(
+        model: impl Into<String>,
+        rubric_version: impl Into<String>,
+        prompt_version: impl Into<String>,
+        scoring_schema_version: impl Into<String>,
+        temperature: f32,
+        seed: Option<u64>,
+    ) -> Result<Self, LoomModelError> {
+        let model = model.into();
+        let rubric_version = rubric_version.into();
+        let prompt_version = prompt_version.into();
+        let scoring_schema_version = scoring_schema_version.into();
+        ensure_not_empty("model", &model)?;
+        ensure_not_empty("rubric_version", &rubric_version)?;
+        ensure_not_empty("prompt_version", &prompt_version)?;
+        ensure_not_empty("scoring_schema_version", &scoring_schema_version)?;
+
+        Ok(Self {
+            model,
+            rubric_version,
+            prompt_version,
+            scoring_schema_version,
+            temperature,
+            seed,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvaluationFixture {
+    pub evaluation_id: u64,
+    pub evaluator: EvaluatorConfig,
+    pub task_id: u64,
+    pub artifact_refs: Vec<u64>,
+    pub score: f32,
+    pub rationale: String,
+}
+
+impl EvaluationFixture {
+    pub fn new(
+        evaluation_id: u64,
+        evaluator: EvaluatorConfig,
+        task_id: u64,
+        artifact_refs: Vec<u64>,
+        score: f32,
+        rationale: impl Into<String>,
+    ) -> Result<Self, LoomModelError> {
+        ensure_not_empty_collection("artifact_refs", &artifact_refs)?;
+        if !(0.0..=1.0).contains(&score) {
+            return Err(LoomModelError::InvalidNumericField {
+                field: "score",
+                reason: "must be between 0 and 1",
+            });
+        }
+
+        let rationale = rationale.into();
+        ensure_not_empty("rationale", &rationale)?;
+
+        Ok(Self {
+            evaluation_id,
+            evaluator,
+            task_id,
+            artifact_refs,
+            score,
+            rationale,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoomModelError {
     EmptyField(&'static str),
