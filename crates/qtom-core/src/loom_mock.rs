@@ -1,7 +1,7 @@
 use crate::loom_model::ensure_not_empty;
 use crate::{
-    DependencyEdge, DependencyKind, IntegrationGroup, JoinPolicy, LoomModelError, PlanNode,
-    TaskEnvelope,
+    ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog, IntegrationGroup, JoinPolicy,
+    LoomEvent, LoomEventType, LoomModelError, PlanNode, TaskEnvelope,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,4 +115,138 @@ pub struct DirectorOutput {
     pub plan: PlanNode,
     pub children: Vec<TaskEnvelope>,
     pub integration_group: IntegrationGroup,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockConstructorConfig {
+    pub agent_id: u64,
+    pub next_artifact_id: u64,
+    pub next_event_id: u64,
+    pub occurred_at_ms: u64,
+    pub correlation_id: u64,
+}
+
+impl Default for MockConstructorConfig {
+    fn default() -> Self {
+        Self {
+            agent_id: 301,
+            next_artifact_id: 900,
+            next_event_id: 2_000,
+            occurred_at_ms: 10_000,
+            correlation_id: 77,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockConstructor {
+    config: MockConstructorConfig,
+}
+
+impl MockConstructor {
+    pub fn new(config: MockConstructorConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn build_child_task(
+        &self,
+        task: &TaskEnvelope,
+    ) -> Result<ConstructorOutput, LoomModelError> {
+        let artifact = ArtifactRef::new(
+            self.config.next_artifact_id,
+            task.root_task_id,
+            task.task_id,
+            self.config.agent_id,
+            "mock.markdown",
+            format!("inline://artifact/{}", self.config.next_artifact_id),
+        )?;
+        let mut event_log = InMemoryEventLog::new();
+        let declared = self.event(
+            self.config.next_event_id,
+            LoomEventType::ArtifactDeclared,
+            task,
+            &artifact.content_ref,
+            None,
+        );
+        let ready = self.event(
+            self.config.next_event_id + 1,
+            LoomEventType::ArtifactReady,
+            task,
+            &artifact.content_ref,
+            Some(declared.event_id),
+        );
+        let completed = self.event(
+            self.config.next_event_id + 2,
+            LoomEventType::TaskCompleted,
+            task,
+            &artifact.content_ref,
+            None,
+        );
+        let decommissioned = self.event(
+            self.config.next_event_id + 3,
+            LoomEventType::AgentDecommissioned,
+            task,
+            &format!(
+                "inline://decommission/{}/{}",
+                self.config.agent_id, task.task_id
+            ),
+            None,
+        );
+
+        event_log
+            .append(declared)
+            .expect("mock constructor should create valid artifact_declared event");
+        event_log
+            .append(ready)
+            .expect("mock constructor should create valid artifact_ready event");
+        event_log
+            .append(completed)
+            .expect("mock constructor should create valid task_completed event");
+        event_log
+            .append(decommissioned)
+            .expect("mock constructor should create valid agent_decommissioned event");
+
+        Ok(ConstructorOutput {
+            artifact,
+            event_log,
+        })
+    }
+
+    fn event(
+        &self,
+        event_id: u64,
+        event_type: LoomEventType,
+        task: &TaskEnvelope,
+        payload_ref: &str,
+        causation_id: Option<u64>,
+    ) -> LoomEvent {
+        LoomEvent {
+            event_id,
+            event_type,
+            root_task_id: task.root_task_id,
+            task_id: Some(task.task_id),
+            parent_task_id: task.parent_task_id,
+            prompt_id: Some(task.prompt_id),
+            agent_id: Some(self.config.agent_id),
+            agent_role: Some("constructor".to_string()),
+            topology_snapshot_id: None,
+            payload_schema: "qtom.mock.constructor.v1".to_string(),
+            payload_ref: payload_ref.to_string(),
+            occurred_at_ms: self.config.occurred_at_ms + (event_id - self.config.next_event_id),
+            causation_id,
+            correlation_id: self.config.correlation_id,
+        }
+    }
+}
+
+impl Default for MockConstructor {
+    fn default() -> Self {
+        Self::new(MockConstructorConfig::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstructorOutput {
+    pub artifact: ArtifactRef,
+    pub event_log: InMemoryEventLog,
 }

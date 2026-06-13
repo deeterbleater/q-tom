@@ -25,7 +25,10 @@ pub use loom::{
     ReplayValidationReport, append_event_log_jsonl, read_event_log_jsonl, validate_events,
     write_event_log_jsonl,
 };
-pub use loom_mock::{DirectorOutput, MockDirector, MockDirectorConfig};
+pub use loom_mock::{
+    ConstructorOutput, DirectorOutput, MockConstructor, MockConstructorConfig, MockDirector,
+    MockDirectorConfig,
+};
 pub use loom_model::{
     ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup, IntegrationReport,
     IntegrationStatus, JoinPolicy, LoomModelError, PlanNode, TaskEnvelope,
