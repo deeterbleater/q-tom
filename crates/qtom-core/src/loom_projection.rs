@@ -54,9 +54,62 @@ pub fn route_trace_projection(log: &InMemoryEventLog) -> String {
     output
 }
 
+pub fn memory_lineage_projection(log: &InMemoryEventLog) -> String {
+    let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
+    let decommission_events = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::AgentDecommissioned)
+        .collect::<Vec<_>>();
+    let memory_events_by_cause = events
+        .iter()
+        .copied()
+        .filter(|event| event.event_type == LoomEventType::MemoryNodeCreated)
+        .filter_map(|event| event.causation_id.map(|cause| (cause, event)))
+        .collect::<HashMap<_, _>>();
+
+    let mut output = String::from("flowchart TD\n");
+
+    for decommission_event in decommission_events {
+        let Some(task_id) = decommission_event.task_id else {
+            continue;
+        };
+        let decommission_node = format!("decommission_{}", decommission_event.event_id);
+        let task_node = format!("task_{task_id}");
+        let agent_label = decommission_event
+            .agent_id
+            .map(|agent_id| agent_id.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        writeln!(output, "  {task_node}[\"Task {task_id}\"]")
+            .expect("writing to String should not fail");
+        writeln!(
+            output,
+            "  {decommission_node}[\"Decommission {agent_label}\"]"
+        )
+        .expect("writing to String should not fail");
+        writeln!(output, "  {task_node} --> {decommission_node}")
+            .expect("writing to String should not fail");
+
+        if let Some(memory_event) = memory_events_by_cause.get(&decommission_event.event_id) {
+            let memory_node = format!("memory_{}", memory_event.event_id);
+            let memory_id = ref_tail(memory_event.payload_ref.as_str());
+            writeln!(output, "  {memory_node}[\"MemoryNode {memory_id}\"]")
+                .expect("writing to String should not fail");
+            writeln!(output, "  {decommission_node} --> {memory_node}")
+                .expect("writing to String should not fail");
+        }
+    }
+
+    output
+}
+
 fn route_decision_id(event: &LoomEvent) -> &str {
-    event
-        .payload_ref
+    ref_tail(event.payload_ref.as_str())
+}
+
+fn ref_tail(payload_ref: &str) -> &str {
+    payload_ref
         .rsplit('/')
         .next()
         .filter(|value| !value.is_empty())

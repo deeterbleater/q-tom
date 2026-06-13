@@ -1,4 +1,4 @@
-use qtom_core::{MockTaskLoom, route_trace_projection};
+use qtom_core::{MockTaskLoom, memory_lineage_projection, route_trace_projection};
 
 #[test]
 fn route_trace_projection_is_derived_from_loom_events() {
@@ -19,4 +19,22 @@ fn route_trace_projection_is_derived_from_loom_events() {
     assert!(projection.contains("task_1001 --> route_102"));
     assert!(projection.contains("route_102 --> assignment_103"));
     assert!(projection.contains("assignment_103 --> agent_10001"));
+}
+
+#[test]
+fn memory_lineage_projection_is_derived_from_decommission_and_memory_events() {
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+
+    let projection = memory_lineage_projection(&output.event_log);
+
+    assert!(projection.starts_with("flowchart TD\n"));
+    assert!(projection.contains("task_1000[\"Task 1000\"]"));
+    assert!(projection.contains("decommission_2003[\"Decommission 10000\"]"));
+    assert!(projection.contains("memory_4000[\"MemoryNode 1500\"]"));
+    assert!(projection.contains("task_1000 --> decommission_2003"));
+    assert!(projection.contains("decommission_2003 --> memory_4000"));
+    assert!(projection.contains("task_1001 --> decommission_2013"));
+    assert!(projection.contains("decommission_2013 --> memory_4001"));
 }

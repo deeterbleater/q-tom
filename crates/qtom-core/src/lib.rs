@@ -39,7 +39,7 @@ pub use loom_model::{
     append_decommission_packet_jsonl, read_decommission_packets_jsonl,
     write_decommission_packets_jsonl,
 };
-pub use loom_projection::route_trace_projection;
+pub use loom_projection::{memory_lineage_projection, route_trace_projection};
 pub use loom_route::{
     RouteDecision, TaskRouteDecisionEventConfig, TaskRouteRequestConfig,
     build_route_request_from_task, route_decision_recorded_event, simulated_agents_for_requests,
