@@ -235,3 +235,43 @@ fn topology_governance_covers_change_controls() {
         );
     }
 }
+
+#[test]
+fn mvp_roadmap_covers_build_phases() {
+    let roadmap_path = repo_root().join("docs/mvp-roadmap.md");
+    let roadmap = fs::read_to_string(&roadmap_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", roadmap_path.display()));
+    let roadmap = roadmap.to_lowercase();
+
+    let required_phases = [
+        "phase 0",
+        "phase 1",
+        "phase 2",
+        "phase 3",
+        "event log",
+        "mock sbjr",
+        "route mock constructor tasks",
+        "decommission packets",
+        "memory nodes",
+        "diagram projections",
+    ];
+
+    for phase in required_phases {
+        assert!(roadmap.contains(phase), "mvp roadmap should cover `{phase}`");
+    }
+
+    let required_constraints = [
+        "local",
+        "observable",
+        "replayable",
+        "acceptance criteria",
+        "test strategy",
+    ];
+
+    for constraint in required_constraints {
+        assert!(
+            roadmap.contains(constraint),
+            "mvp roadmap should include `{constraint}`"
+        );
+    }
+}
