@@ -176,7 +176,7 @@ impl std::fmt::Display for LoomModelError {
 
 impl std::error::Error for LoomModelError {}
 
-fn ensure_not_empty(field: &'static str, value: &str) -> Result<(), LoomModelError> {
+pub fn ensure_not_empty(field: &'static str, value: &str) -> Result<(), LoomModelError> {
     if value.trim().is_empty() {
         Err(LoomModelError::EmptyField(field))
     } else {

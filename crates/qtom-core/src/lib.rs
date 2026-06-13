@@ -4,6 +4,7 @@ pub mod cpu_router;
 pub mod fixtures;
 pub mod golden;
 pub mod loom;
+pub mod loom_mock;
 pub mod loom_model;
 pub mod metrics;
 pub mod route_table;
@@ -24,6 +25,7 @@ pub use loom::{
     ReplayValidationReport, append_event_log_jsonl, read_event_log_jsonl, validate_events,
     write_event_log_jsonl,
 };
+pub use loom_mock::{DirectorOutput, MockDirector, MockDirectorConfig};
 pub use loom_model::{
     DependencyEdge, DependencyKind, IntegrationGroup, JoinPolicy, LoomModelError, PlanNode,
     TaskEnvelope,
