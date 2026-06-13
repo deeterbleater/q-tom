@@ -480,6 +480,105 @@ pub enum MemoryNodeKind {
     OpenLoop,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientAxis {
+    pub axis_id: u64,
+    pub name: String,
+    pub low_anchor: String,
+    pub high_anchor: String,
+    pub confidence: f32,
+}
+
+impl GradientAxis {
+    pub fn new(
+        axis_id: u64,
+        name: impl Into<String>,
+        low_anchor: impl Into<String>,
+        high_anchor: impl Into<String>,
+        confidence: f32,
+    ) -> Result<Self, LoomModelError> {
+        let name = name.into();
+        let low_anchor = low_anchor.into();
+        let high_anchor = high_anchor.into();
+        ensure_not_empty("name", &name)?;
+        ensure_not_empty("low_anchor", &low_anchor)?;
+        ensure_not_empty("high_anchor", &high_anchor)?;
+
+        Ok(Self {
+            axis_id,
+            name,
+            low_anchor,
+            high_anchor,
+            confidence,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientSpace {
+    pub gradient_space_id: u64,
+    pub name: String,
+    pub version: u64,
+    pub axes: Vec<GradientAxis>,
+}
+
+impl GradientSpace {
+    pub fn new(
+        gradient_space_id: u64,
+        name: impl Into<String>,
+        version: u64,
+        axes: Vec<GradientAxis>,
+    ) -> Result<Self, LoomModelError> {
+        let name = name.into();
+        ensure_not_empty("name", &name)?;
+        ensure_not_empty_collection("axes", &axes)?;
+
+        Ok(Self {
+            gradient_space_id,
+            name,
+            version,
+            axes,
+        })
+    }
+
+    pub fn place_memory_node(
+        &self,
+        placement_id: u64,
+        node: &MemoryNode,
+        coordinates: Vec<f32>,
+        placement_evidence_ref: impl Into<String>,
+    ) -> Result<MemoryPlacement, LoomModelError> {
+        if coordinates.len() != self.axes.len() {
+            return Err(LoomModelError::InvalidNumericField {
+                field: "coordinates",
+                reason: "must match gradient axis count",
+            });
+        }
+
+        let placement_evidence_ref = placement_evidence_ref.into();
+        ensure_not_empty("placement_evidence_ref", &placement_evidence_ref)?;
+
+        Ok(MemoryPlacement {
+            placement_id,
+            memory_node_id: node.memory_node_id,
+            gradient_space_id: self.gradient_space_id,
+            gradient_space_version: self.version,
+            coordinates,
+            placement_evidence_ref,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemoryPlacement {
+    pub placement_id: u64,
+    pub memory_node_id: u64,
+    pub gradient_space_id: u64,
+    pub gradient_space_version: u64,
+    pub coordinates: Vec<f32>,
+    pub placement_evidence_ref: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoomModelError {
     EmptyField(&'static str),

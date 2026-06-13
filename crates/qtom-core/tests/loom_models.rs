@@ -1,7 +1,7 @@
 use qtom_core::{
-    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup,
-    IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
-    PlanNode, TaskEnvelope,
+    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
+    GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
+    LoomModelError, MemoryNode, MemoryNodeKind, PlanNode, TaskEnvelope,
 };
 
 #[test]
@@ -231,4 +231,111 @@ fn memory_node_requires_evidence_refs() {
     .expect_err("memory node should require evidence refs");
 
     assert_eq!(err, LoomModelError::EmptyCollection("evidence_refs"));
+}
+
+#[test]
+fn gradient_space_preserves_versioned_axes() {
+    let space = GradientSpace::new(
+        44,
+        "mock-memory",
+        3,
+        vec![
+            GradientAxis::new(1, "domain", "general", "specialized", 0.9)
+                .expect("axis should be valid"),
+            GradientAxis::new(2, "tool-affinity", "low", "high", 0.8)
+                .expect("axis should be valid"),
+        ],
+    )
+    .expect("space should be valid");
+
+    assert_eq!(space.gradient_space_id, 44);
+    assert_eq!(space.name, "mock-memory");
+    assert_eq!(space.version, 3);
+    assert_eq!(space.axes.len(), 2);
+}
+
+#[test]
+fn memory_node_can_be_placed_in_versioned_gradient_space() {
+    let space = GradientSpace::new(
+        44,
+        "mock-memory",
+        3,
+        vec![
+            GradientAxis::new(1, "domain", "general", "specialized", 0.9)
+                .expect("axis should be valid"),
+            GradientAxis::new(2, "tool-affinity", "low", "high", 0.8)
+                .expect("axis should be valid"),
+        ],
+    )
+    .expect("space should be valid");
+    let node = MemoryNode::from_packet(
+        1_500,
+        MemoryNodeKind::Episode,
+        1,
+        11,
+        1_200,
+        vec!["inline://summary/1200".to_string()],
+        "completed constructor task",
+    )
+    .expect("memory node should be valid");
+
+    let placement = space
+        .place_memory_node(
+            9_000,
+            &node,
+            vec![0.25, 0.75],
+            "inline://placement/evidence/9000",
+        )
+        .expect("placement should be valid");
+
+    assert_eq!(placement.placement_id, 9_000);
+    assert_eq!(placement.memory_node_id, 1_500);
+    assert_eq!(placement.gradient_space_id, 44);
+    assert_eq!(placement.gradient_space_version, 3);
+    assert_eq!(placement.coordinates, vec![0.25, 0.75]);
+    assert_eq!(
+        placement.placement_evidence_ref,
+        "inline://placement/evidence/9000"
+    );
+}
+
+#[test]
+fn memory_placement_rejects_coordinate_axis_mismatch() {
+    let space = GradientSpace::new(
+        44,
+        "mock-memory",
+        3,
+        vec![
+            GradientAxis::new(1, "domain", "general", "specialized", 0.9)
+                .expect("axis should be valid"),
+        ],
+    )
+    .expect("space should be valid");
+    let node = MemoryNode::from_packet(
+        1_500,
+        MemoryNodeKind::Episode,
+        1,
+        11,
+        1_200,
+        vec!["inline://summary/1200".to_string()],
+        "completed constructor task",
+    )
+    .expect("memory node should be valid");
+
+    let err = space
+        .place_memory_node(
+            9_000,
+            &node,
+            vec![0.25, 0.75],
+            "inline://placement/evidence/9000",
+        )
+        .expect_err("coordinate count must match axes");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidNumericField {
+            field: "coordinates",
+            reason: "must match gradient axis count",
+        }
+    );
 }
