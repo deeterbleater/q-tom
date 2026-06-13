@@ -4,6 +4,7 @@ pub mod cpu_router;
 pub mod fixtures;
 pub mod golden;
 pub mod loom;
+pub mod loom_model;
 pub mod metrics;
 pub mod route_table;
 pub mod score;
@@ -22,6 +23,10 @@ pub use loom::{
     InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
     ReplayValidationReport, append_event_log_jsonl, read_event_log_jsonl, validate_events,
     write_event_log_jsonl,
+};
+pub use loom_model::{
+    DependencyEdge, DependencyKind, IntegrationGroup, JoinPolicy, LoomModelError, PlanNode,
+    TaskEnvelope,
 };
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
