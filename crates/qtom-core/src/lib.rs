@@ -28,7 +28,7 @@ pub use loom::{
 pub use loom_mock::{
     ConstructorOutput, CuratorOutput, DirectorOutput, IntegrationOutput, MockConstructor,
     MockConstructorConfig, MockCurator, MockCuratorConfig, MockDirector, MockDirectorConfig,
-    MockIntegration, MockIntegrationConfig,
+    MockIntegration, MockIntegrationConfig, MockTaskLoom, MockTaskLoomOutput,
 };
 pub use loom_model::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, IntegrationGroup,

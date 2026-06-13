@@ -2,7 +2,7 @@ use crate::loom_model::ensure_not_empty;
 use crate::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog,
     IntegrationGroup, IntegrationReport, JoinPolicy, LoomEvent, LoomEventType, LoomModelError,
-    MemoryNode, MemoryNodeKind, PlanNode, TaskEnvelope,
+    MemoryNode, MemoryNodeKind, PlanNode, ReplayCursor, TaskEnvelope,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -431,4 +431,184 @@ impl Default for MockCurator {
 pub struct CuratorOutput {
     pub memory_node: MemoryNode,
     pub event_log: InMemoryEventLog,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MockTaskLoom {
+    director: MockDirector,
+    integration: MockIntegration,
+    curator: MockCurator,
+}
+
+impl MockTaskLoom {
+    pub fn new(director: MockDirector, integration: MockIntegration, curator: MockCurator) -> Self {
+        Self {
+            director,
+            integration,
+            curator,
+        }
+    }
+
+    pub fn run_prompt(
+        &self,
+        prompt_id: u64,
+        root_task_id: u64,
+        summary: impl Into<String>,
+    ) -> Result<MockTaskLoomOutput, LoomModelError> {
+        let summary = summary.into();
+        let root_task = TaskEnvelope::root(root_task_id, prompt_id, &summary)?;
+        let director =
+            self.director
+                .split_root_task(prompt_id, root_task_id, root_task_id, summary)?;
+        let mut event_log = InMemoryEventLog::new();
+
+        event_log
+            .append(task_created_event(1, &root_task, "qtom.mock.root_task.v1"))
+            .expect("mock loom should create valid root task_created event");
+        for (index, child) in director.children.iter().enumerate() {
+            event_log
+                .append(task_created_event(
+                    2 + index as u64,
+                    child,
+                    "qtom.mock.child_task.v1",
+                ))
+                .expect("mock loom should create valid child task_created event");
+        }
+        event_log
+            .append(LoomEvent {
+                event_id: 10,
+                event_type: LoomEventType::IntegrationRequested,
+                root_task_id,
+                task_id: Some(root_task_id),
+                parent_task_id: None,
+                prompt_id: Some(prompt_id),
+                agent_id: Some(700),
+                agent_role: Some("integration".to_string()),
+                topology_snapshot_id: None,
+                payload_schema: "qtom.mock.integration_path.v1".to_string(),
+                payload_ref: format!(
+                    "inline://integration/group/{}",
+                    director.integration_group.integration_group_id
+                ),
+                occurred_at_ms: 1_010,
+                causation_id: None,
+                correlation_id: 77,
+            })
+            .expect("mock loom should create valid integration path event");
+
+        let mut constructor_outputs = Vec::new();
+        let mut packets = Vec::new();
+        let mut decommission_events = Vec::new();
+        for (index, child) in director.children.iter().enumerate() {
+            let constructor = MockConstructor::new(MockConstructorConfig {
+                agent_id: 301 + index as u64,
+                next_artifact_id: 900 + index as u64,
+                next_event_id: 2_000 + (index as u64 * 10),
+                occurred_at_ms: 10_000 + (index as u64 * 100),
+                correlation_id: 77,
+            });
+            let constructor_output = constructor.build_child_task(child)?;
+            for event in constructor_output.event_log.replay(ReplayCursor::start()) {
+                event_log
+                    .append(event.clone())
+                    .expect("mock loom should merge valid constructor event");
+            }
+
+            let decommission_event = constructor_output
+                .event_log
+                .events_by_type(LoomEventType::AgentDecommissioned)
+                .into_iter()
+                .next()
+                .expect("constructor output should include decommission event")
+                .clone();
+            packets.push(AgentDecommissionPacket::completed(
+                1_200 + index as u64,
+                constructor_output.artifact.agent_id,
+                child.root_task_id,
+                child.task_id,
+                child.prompt_id,
+                child.plan_id,
+                vec![constructor_output.artifact.artifact_id],
+                decommission_event.payload_ref.clone(),
+            )?);
+            decommission_events.push(decommission_event);
+            constructor_outputs.push(constructor_output);
+        }
+
+        let artifacts = constructor_outputs
+            .iter()
+            .map(|output| output.artifact.clone())
+            .collect::<Vec<_>>();
+        let integration = self
+            .integration
+            .integrate_completed_children(&director.integration_group, &artifacts)?;
+        for event in integration.event_log.replay(ReplayCursor::start()) {
+            event_log
+                .append(event.clone())
+                .expect("mock loom should merge valid integration event");
+        }
+
+        let mut curator_outputs = Vec::new();
+        for (index, (packet, decommission_event)) in
+            packets.iter().zip(decommission_events.iter()).enumerate()
+        {
+            let curator = MockCurator::new(MockCuratorConfig {
+                curator_agent_id: self.curator.config.curator_agent_id,
+                next_memory_node_id: self.curator.config.next_memory_node_id + index as u64,
+                next_event_id: self.curator.config.next_event_id + index as u64,
+                occurred_at_ms: self.curator.config.occurred_at_ms + index as u64,
+                correlation_id: self.curator.config.correlation_id,
+            });
+            let curator_output = curator.curate_decommission_packet(packet, decommission_event)?;
+            let memory_event = curator_output
+                .event_log
+                .events_by_type(LoomEventType::MemoryNodeCreated)
+                .into_iter()
+                .next()
+                .expect("curator output should include memory event")
+                .clone();
+            event_log
+                .append(memory_event)
+                .expect("mock loom should merge valid memory event");
+            curator_outputs.push(curator_output);
+        }
+
+        Ok(MockTaskLoomOutput {
+            root_task,
+            director,
+            constructor_outputs,
+            integration,
+            curator_outputs,
+            event_log,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockTaskLoomOutput {
+    pub root_task: TaskEnvelope,
+    pub director: DirectorOutput,
+    pub constructor_outputs: Vec<ConstructorOutput>,
+    pub integration: IntegrationOutput,
+    pub curator_outputs: Vec<CuratorOutput>,
+    pub event_log: InMemoryEventLog,
+}
+
+fn task_created_event(event_id: u64, task: &TaskEnvelope, payload_schema: &str) -> LoomEvent {
+    LoomEvent {
+        event_id,
+        event_type: LoomEventType::TaskCreated,
+        root_task_id: task.root_task_id,
+        task_id: Some(task.task_id),
+        parent_task_id: task.parent_task_id,
+        prompt_id: Some(task.prompt_id),
+        agent_id: None,
+        agent_role: None,
+        topology_snapshot_id: None,
+        payload_schema: payload_schema.to_string(),
+        payload_ref: format!("inline://task/{}", task.task_id),
+        occurred_at_ms: 1_000 + event_id,
+        causation_id: None,
+        correlation_id: 77,
+    }
 }

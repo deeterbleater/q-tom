@@ -10,6 +10,25 @@ pub struct TaskEnvelope {
 }
 
 impl TaskEnvelope {
+    pub fn root(
+        task_id: u64,
+        prompt_id: u64,
+        summary: impl Into<String>,
+    ) -> Result<Self, LoomModelError> {
+        let summary = summary.into();
+        ensure_not_empty("summary", &summary)?;
+
+        Ok(Self {
+            task_id,
+            root_task_id: task_id,
+            parent_task_id: None,
+            prompt_id,
+            plan_id: 0,
+            integration_group_id: 0,
+            summary,
+        })
+    }
+
     pub fn child(
         task_id: u64,
         root_task_id: u64,
