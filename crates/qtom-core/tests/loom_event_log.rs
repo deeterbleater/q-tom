@@ -33,6 +33,16 @@ fn caused_by(mut event: LoomEvent, causation_id: u64) -> LoomEvent {
     event
 }
 
+fn with_root_task(mut event: LoomEvent, root_task_id: u64) -> LoomEvent {
+    event.root_task_id = root_task_id;
+    event
+}
+
+fn with_correlation(mut event: LoomEvent, correlation_id: u64) -> LoomEvent {
+    event.correlation_id = correlation_id;
+    event
+}
+
 fn child_task(mut event: LoomEvent, parent_task_id: u64) -> LoomEvent {
     event.parent_task_id = Some(parent_task_id);
     event
@@ -163,6 +173,28 @@ fn task_assignment_accepts_route_decision_cause() {
         .expect("route_decision_recorded should append");
     log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("task_assigned should accept route decision causation");
+}
+
+#[test]
+fn task_assignment_rejects_route_decision_for_different_task() {
+    let mut log = InMemoryEventLog::new();
+
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+    log.append(route_decision_event(2, 11))
+        .expect("route_decision_recorded should append");
+
+    let err = log
+        .append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
+        .expect_err("task_assigned should require same-task route causation");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedTaskRouteDecision {
+            task_id: 10,
+            route_task_id: 11,
+        }
+    );
 }
 
 #[test]
@@ -394,6 +426,68 @@ fn replay_validation_accepts_assignment_with_route_decision() {
 
     assert_eq!(report.route_decision_count, 1);
     assert_eq!(report.assignment_count, 1);
+}
+
+#[test]
+fn replay_validation_rejects_assignment_caused_by_different_task_route_decision() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        route_decision_event(2, 11),
+        caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("assignment should require a route decision for the same task");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedTaskRouteDecision {
+            task_id: 10,
+            route_task_id: 11,
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_assignment_caused_by_different_root_route_decision() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        with_root_task(route_decision_event(2, 10), 2),
+        caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("assignment should require route decision from the same root");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedRouteDecisionContext {
+            assignment_event_id: 3,
+            route_decision_event_id: 2,
+            field: "root_task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_assignment_caused_by_different_correlation_route_decision() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        with_correlation(route_decision_event(2, 10), 100),
+        caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("assignment should require route decision from the same correlation");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedRouteDecisionContext {
+            assignment_event_id: 3,
+            route_decision_event_id: 2,
+            field: "correlation_id",
+        }
+    );
 }
 
 #[test]

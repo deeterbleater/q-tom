@@ -202,6 +202,10 @@ impl InMemoryEventLog {
             });
         }
 
+        if matches!(event.event_type, LoomEventType::TaskAssigned) {
+            validate_route_decision_assignment_context(event, causation_event)?;
+        }
+
         Ok(())
     }
 }
@@ -460,14 +464,48 @@ fn validate_assignment_route_decision(
         return Ok(());
     };
 
-    let has_route_decision = replay_log
+    let Some(route_decision) = replay_log
         .events
         .iter()
-        .any(|candidate| candidate.event_id == causation_id);
-
-    if !has_route_decision {
+        .find(|candidate| candidate.event_id == causation_id)
+    else {
         return Err(LoomEventError::MissingTaskRouteDecision {
             task_id: event.task_id.unwrap_or_default(),
+        });
+    };
+
+    validate_route_decision_assignment_context(event, route_decision)?;
+
+    Ok(())
+}
+
+fn validate_route_decision_assignment_context(
+    assignment: &LoomEvent,
+    route_decision: &LoomEvent,
+) -> Result<(), LoomEventError> {
+    let task_id = assignment.task_id.unwrap_or_default();
+    let route_task_id = route_decision.task_id.unwrap_or_default();
+
+    if task_id != route_task_id {
+        return Err(LoomEventError::MismatchedTaskRouteDecision {
+            task_id,
+            route_task_id,
+        });
+    }
+
+    if assignment.root_task_id != route_decision.root_task_id {
+        return Err(LoomEventError::MismatchedRouteDecisionContext {
+            assignment_event_id: assignment.event_id,
+            route_decision_event_id: route_decision.event_id,
+            field: "root_task_id",
+        });
+    }
+
+    if assignment.correlation_id != route_decision.correlation_id {
+        return Err(LoomEventError::MismatchedRouteDecisionContext {
+            assignment_event_id: assignment.event_id,
+            route_decision_event_id: route_decision.event_id,
+            field: "correlation_id",
         });
     }
 
@@ -521,6 +559,15 @@ pub enum LoomEventError {
     MissingTaskRouteDecision {
         task_id: u64,
     },
+    MismatchedTaskRouteDecision {
+        task_id: u64,
+        route_task_id: u64,
+    },
+    MismatchedRouteDecisionContext {
+        assignment_event_id: u64,
+        route_decision_event_id: u64,
+        field: &'static str,
+    },
     InvalidRouteDecisionTelemetry {
         event_id: u64,
         field: &'static str,
@@ -573,6 +620,21 @@ impl std::fmt::Display for LoomEventError {
             Self::MissingTaskRouteDecision { task_id } => {
                 write!(f, "assigned task {task_id} is missing route decision event")
             }
+            Self::MismatchedTaskRouteDecision {
+                task_id,
+                route_task_id,
+            } => write!(
+                f,
+                "assigned task {task_id} references route decision for task {route_task_id}"
+            ),
+            Self::MismatchedRouteDecisionContext {
+                assignment_event_id,
+                route_decision_event_id,
+                field,
+            } => write!(
+                f,
+                "assignment event {assignment_event_id} references route decision event {route_decision_event_id} with mismatched {field}"
+            ),
             Self::InvalidRouteDecisionTelemetry { event_id, field } => {
                 write!(f, "route decision event {event_id} has invalid {field}")
             }
