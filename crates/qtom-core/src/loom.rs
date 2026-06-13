@@ -1,6 +1,11 @@
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::Path;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LoomEvent {
     pub event_id: u64,
     pub event_type: LoomEventType,
@@ -82,7 +87,7 @@ fn requires_topology_snapshot_id(event_type: LoomEventType) -> bool {
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum LoomEventType {
     TaskCreated,
     TaskAssigned,
@@ -199,6 +204,71 @@ impl InMemoryEventLog {
 
         Ok(())
     }
+}
+
+pub fn write_event_log_jsonl<'a, I, P>(path: P, events: I) -> Result<(), LoomEventError>
+where
+    I: IntoIterator<Item = &'a LoomEvent>,
+    P: AsRef<Path>,
+{
+    let file = File::create(path.as_ref()).map_err(|source| LoomEventError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for event in events {
+        serde_json::to_writer(&mut writer, event).map_err(|source| LoomEventError::Json {
+            line: None,
+            source: source.to_string(),
+        })?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| LoomEventError::Io {
+                path: path.as_ref().display().to_string(),
+                source: source.to_string(),
+            })?;
+    }
+
+    writer.flush().map_err(|source| LoomEventError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+pub fn read_event_log_jsonl<P>(path: P) -> Result<InMemoryEventLog, LoomEventError>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref()).map_err(|source| LoomEventError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let reader = BufReader::new(file);
+    let mut log = InMemoryEventLog::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line.map_err(|source| LoomEventError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let event: LoomEvent =
+            serde_json::from_str(&line).map_err(|source| LoomEventError::Json {
+                line: Some(line_number),
+                source: source.to_string(),
+            })?;
+        log.append(event)?;
+    }
+
+    Ok(log)
 }
 
 pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, LoomEventError> {
@@ -396,6 +466,14 @@ pub enum LoomEventError {
     MissingTaskIntegration {
         task_id: u64,
     },
+    Io {
+        path: String,
+        source: String,
+    },
+    Json {
+        line: Option<usize>,
+        source: String,
+    },
 }
 
 impl std::fmt::Display for LoomEventError {
@@ -436,6 +514,11 @@ impl std::fmt::Display for LoomEventError {
             Self::MissingTaskIntegration { task_id } => {
                 write!(f, "child task {task_id} is missing integration path")
             }
+            Self::Io { path, source } => write!(f, "loom event log I/O failed at {path}: {source}"),
+            Self::Json { line, source } => match line {
+                Some(line) => write!(f, "loom event JSONL parse failed at line {line}: {source}"),
+                None => write!(f, "loom event JSON encode failed: {source}"),
+            },
         }
     }
 }
