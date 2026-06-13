@@ -177,3 +177,22 @@ fn golden_mock_loom_event_log_matches_current_replay_report() {
             .contains("integration_group_10 --> integration_report_3000")
     );
 }
+
+#[test]
+fn corrupted_golden_mock_loom_log_reports_unknown_route_causation() {
+    let golden_path = repo_fixture_path(GOLDEN_MOCK_LOOM_LOG);
+    let corrupted_path = temp_path("corrupted-mock-log");
+    let golden = fs::read_to_string(&golden_path).expect("golden mock loom log should exist");
+    let corrupted = golden.replace(
+        r#""event_id":101,"event_type":"TaskAssigned","root_task_id":10,"task_id":1000,"parent_task_id":10,"prompt_id":7,"agent_id":10000,"agent_role":"constructor","topology_snapshot_id":null,"payload_schema":"qtom.mock.task_assignment.v1","payload_ref":"inline://task-assignment/1000/10000","occurred_at_ms":2101,"causation_id":100,"#,
+        r#""event_id":101,"event_type":"TaskAssigned","root_task_id":10,"task_id":1000,"parent_task_id":10,"prompt_id":7,"agent_id":10000,"agent_role":"constructor","topology_snapshot_id":null,"payload_schema":"qtom.mock.task_assignment.v1","payload_ref":"inline://task-assignment/1000/10000","occurred_at_ms":2101,"causation_id":999,"#,
+    );
+    assert_ne!(corrupted, golden);
+    fs::write(&corrupted_path, corrupted).expect("write corrupted golden fixture");
+
+    let err = read_event_log_jsonl(&corrupted_path)
+        .expect_err("corrupted assignment route causation should fail load");
+    fs::remove_file(&corrupted_path).ok();
+
+    assert_eq!(err, LoomEventError::UnknownCausationId(999));
+}
