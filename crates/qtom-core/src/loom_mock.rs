@@ -1,8 +1,11 @@
 use crate::loom_model::ensure_not_empty;
 use crate::{
-    AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, InMemoryEventLog,
-    IntegrationGroup, IntegrationReport, JoinPolicy, LoomEvent, LoomEventType, LoomModelError,
-    MemoryNode, MemoryNodeKind, PlanNode, ReplayCursor, TaskEnvelope,
+    AgentDecommissionPacket, AgentRuntimeState, ArtifactRef, CpuRouter, DependencyEdge,
+    DependencyKind, InMemoryEventLog, IntegrationGroup, IntegrationReport, JoinPolicy, LoomEvent,
+    LoomEventType, LoomModelError, MemoryNode, MemoryNodeKind, PlanNode, ReplayCursor,
+    RouteDecision, ScoreCoefficients, TaskEnvelope, TaskRouteDecisionEventConfig,
+    TaskRouteRequestConfig, build_route_request_from_task, route_decision_recorded_event,
+    simulated_agents_for_requests,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -496,12 +499,61 @@ impl MockTaskLoom {
             })
             .expect("mock loom should create valid integration path event");
 
+        let route_requests = director
+            .children
+            .iter()
+            .map(|child| build_route_request_from_task(child, TaskRouteRequestConfig::default()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let agents = simulated_agents_for_requests(&route_requests, 10_000);
+        let states = vec![AgentRuntimeState::available(); agents.len()];
+        let router = CpuRouter::new(agents, ScoreCoefficients::default());
+        let route_results = router
+            .route_batch_with_workers(&route_requests, &states, 1)
+            .expect("mock loom route fixture should be valid");
+
+        let mut route_decisions = Vec::new();
         let mut constructor_outputs = Vec::new();
         let mut packets = Vec::new();
         let mut decommission_events = Vec::new();
-        for (index, child) in director.children.iter().enumerate() {
+        for (index, (child, route_result)) in director
+            .children
+            .iter()
+            .zip(route_results.iter())
+            .enumerate()
+        {
+            let route_decision = RouteDecision::from_result(
+                500 + index as u64,
+                99,
+                "cpu",
+                "mock-routing-v1",
+                route_result,
+            )?;
+            let route_event = route_decision_recorded_event(
+                &route_decision,
+                TaskRouteDecisionEventConfig {
+                    event_id: 100 + (index as u64 * 2),
+                    root_task_id,
+                    prompt_id,
+                    topology_snapshot_id: 44,
+                    occurred_at_ms: 2_000 + index as u64,
+                    correlation_id: 77,
+                },
+            );
+            let assignment_event = task_assigned_event(
+                route_event.event_id + 1,
+                child,
+                route_decision.selected_agent_id,
+                route_event.event_id,
+            );
+            event_log
+                .append(route_event)
+                .expect("mock loom should merge valid route decision event");
+            event_log
+                .append(assignment_event)
+                .expect("mock loom should merge valid task assignment event");
+
             let constructor = MockConstructor::new(MockConstructorConfig {
-                agent_id: 301 + index as u64,
+                agent_id: u64::from(route_decision.selected_agent_id),
                 next_artifact_id: 900 + index as u64,
                 next_event_id: 2_000 + (index as u64 * 10),
                 occurred_at_ms: 10_000 + (index as u64 * 100),
@@ -533,6 +585,7 @@ impl MockTaskLoom {
             )?);
             decommission_events.push(decommission_event);
             constructor_outputs.push(constructor_output);
+            route_decisions.push(route_decision);
         }
 
         let artifacts = constructor_outputs
@@ -576,6 +629,7 @@ impl MockTaskLoom {
         Ok(MockTaskLoomOutput {
             root_task,
             director,
+            route_decisions,
             constructor_outputs,
             integration,
             curator_outputs,
@@ -584,10 +638,11 @@ impl MockTaskLoom {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MockTaskLoomOutput {
     pub root_task: TaskEnvelope,
     pub director: DirectorOutput,
+    pub route_decisions: Vec<RouteDecision>,
     pub constructor_outputs: Vec<ConstructorOutput>,
     pub integration: IntegrationOutput,
     pub curator_outputs: Vec<CuratorOutput>,
@@ -609,6 +664,33 @@ fn task_created_event(event_id: u64, task: &TaskEnvelope, payload_schema: &str) 
         payload_ref: format!("inline://task/{}", task.task_id),
         occurred_at_ms: 1_000 + event_id,
         causation_id: None,
+        correlation_id: 77,
+    }
+}
+
+fn task_assigned_event(
+    event_id: u64,
+    task: &TaskEnvelope,
+    selected_agent_id: u32,
+    route_event_id: u64,
+) -> LoomEvent {
+    LoomEvent {
+        event_id,
+        event_type: LoomEventType::TaskAssigned,
+        root_task_id: task.root_task_id,
+        task_id: Some(task.task_id),
+        parent_task_id: task.parent_task_id,
+        prompt_id: Some(task.prompt_id),
+        agent_id: Some(u64::from(selected_agent_id)),
+        agent_role: Some("constructor".to_string()),
+        topology_snapshot_id: None,
+        payload_schema: "qtom.mock.task_assignment.v1".to_string(),
+        payload_ref: format!(
+            "inline://task-assignment/{}/{selected_agent_id}",
+            task.task_id
+        ),
+        occurred_at_ms: 2_000 + event_id,
+        causation_id: Some(route_event_id),
         correlation_id: 77,
     }
 }
