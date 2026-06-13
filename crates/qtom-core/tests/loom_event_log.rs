@@ -43,6 +43,11 @@ fn with_correlation(mut event: LoomEvent, correlation_id: u64) -> LoomEvent {
     event
 }
 
+fn with_payload_ref(mut event: LoomEvent, payload_ref: &str) -> LoomEvent {
+    event.payload_ref = payload_ref.to_string();
+    event
+}
+
 fn child_task(mut event: LoomEvent, parent_task_id: u64) -> LoomEvent {
     event.parent_task_id = Some(parent_task_id);
     event
@@ -210,10 +215,49 @@ fn artifact_ready_requires_artifact_declared_cause() {
         LoomEventError::MissingRequiredCausation(LoomEventType::ArtifactReady)
     );
 
-    log.append(event(LoomEventType::ArtifactDeclared, 1, 10))
-        .expect("artifact_declared should append");
-    log.append(caused_by(event(LoomEventType::ArtifactReady, 2, 10), 1))
-        .expect("artifact_ready should accept artifact_declared causation");
+    log.append(with_payload_ref(
+        event(LoomEventType::ArtifactDeclared, 1, 10),
+        "inline://artifact/900",
+    ))
+    .expect("artifact_declared should append");
+    log.append(caused_by(
+        with_payload_ref(
+            event(LoomEventType::ArtifactReady, 2, 10),
+            "inline://artifact/900",
+        ),
+        1,
+    ))
+    .expect("artifact_ready should accept artifact_declared causation");
+}
+
+#[test]
+fn artifact_ready_rejects_different_artifact_ref() {
+    let mut log = InMemoryEventLog::new();
+
+    log.append(with_payload_ref(
+        event(LoomEventType::ArtifactDeclared, 1, 10),
+        "inline://artifact/900",
+    ))
+    .expect("artifact_declared should append");
+
+    let err = log
+        .append(caused_by(
+            with_payload_ref(
+                event(LoomEventType::ArtifactReady, 2, 10),
+                "inline://artifact/901",
+            ),
+            1,
+        ))
+        .expect_err("artifact_ready should match declared artifact ref");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedArtifactReady {
+            ready_event_id: 2,
+            declared_event_id: 1,
+            field: "payload_ref",
+        }
+    );
 }
 
 #[test]
@@ -522,6 +566,99 @@ fn replay_validation_rejects_route_decision_with_wrong_payload_ref() {
         LoomEventError::InvalidRouteDecisionTelemetry {
             event_id: 2,
             field: "payload_ref",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_artifact_ready_caused_by_different_task_declaration() {
+    let events = vec![
+        with_payload_ref(
+            event(LoomEventType::ArtifactDeclared, 1, 11),
+            "inline://artifact/900",
+        ),
+        caused_by(
+            with_payload_ref(
+                event(LoomEventType::ArtifactReady, 2, 10),
+                "inline://artifact/900",
+            ),
+            1,
+        ),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("artifact_ready should match declaration task context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedArtifactReady {
+            ready_event_id: 2,
+            declared_event_id: 1,
+            field: "task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_artifact_ready_caused_by_different_root_declaration() {
+    let events = vec![
+        with_root_task(
+            with_payload_ref(
+                event(LoomEventType::ArtifactDeclared, 1, 10),
+                "inline://artifact/900",
+            ),
+            2,
+        ),
+        caused_by(
+            with_payload_ref(
+                event(LoomEventType::ArtifactReady, 2, 10),
+                "inline://artifact/900",
+            ),
+            1,
+        ),
+    ];
+
+    let err =
+        validate_events(&events).expect_err("artifact_ready should match declaration root context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedArtifactReady {
+            ready_event_id: 2,
+            declared_event_id: 1,
+            field: "root_task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_artifact_ready_caused_by_different_correlation_declaration() {
+    let events = vec![
+        with_correlation(
+            with_payload_ref(
+                event(LoomEventType::ArtifactDeclared, 1, 10),
+                "inline://artifact/900",
+            ),
+            100,
+        ),
+        caused_by(
+            with_payload_ref(
+                event(LoomEventType::ArtifactReady, 2, 10),
+                "inline://artifact/900",
+            ),
+            1,
+        ),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("artifact_ready should match declaration correlation context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedArtifactReady {
+            ready_event_id: 2,
+            declared_event_id: 1,
+            field: "correlation_id",
         }
     );
 }

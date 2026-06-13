@@ -206,6 +206,10 @@ impl InMemoryEventLog {
             validate_route_decision_assignment_context(event, causation_event)?;
         }
 
+        if matches!(event.event_type, LoomEventType::ArtifactReady) {
+            validate_artifact_ready_context(event, causation_event)?;
+        }
+
         Ok(())
     }
 }
@@ -343,6 +347,10 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             validate_route_decision_telemetry(event)?;
         }
 
+        if matches!(event.event_type, LoomEventType::ArtifactReady) {
+            validate_artifact_ready(event, &replay_log)?;
+        }
+
         replay_log.append(event.clone())?;
         root_task_ids.insert(event.root_task_id);
 
@@ -449,6 +457,68 @@ fn validate_route_decision_telemetry(event: &LoomEvent) -> Result<(), LoomEventE
     if !event.payload_ref.starts_with("inline://route-decision/") {
         return Err(LoomEventError::InvalidRouteDecisionTelemetry {
             event_id: event.event_id,
+            field: "payload_ref",
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_artifact_ready(
+    event: &LoomEvent,
+    replay_log: &InMemoryEventLog,
+) -> Result<(), LoomEventError> {
+    let Some(causation_id) = event.causation_id else {
+        return Ok(());
+    };
+
+    let Some(declared_event) = replay_log
+        .events
+        .iter()
+        .find(|candidate| candidate.event_id == causation_id)
+    else {
+        return Ok(());
+    };
+
+    if declared_event.event_type != LoomEventType::ArtifactDeclared {
+        return Ok(());
+    }
+
+    validate_artifact_ready_context(event, declared_event)
+}
+
+fn validate_artifact_ready_context(
+    ready_event: &LoomEvent,
+    declared_event: &LoomEvent,
+) -> Result<(), LoomEventError> {
+    if ready_event.task_id != declared_event.task_id {
+        return Err(LoomEventError::MismatchedArtifactReady {
+            ready_event_id: ready_event.event_id,
+            declared_event_id: declared_event.event_id,
+            field: "task_id",
+        });
+    }
+
+    if ready_event.root_task_id != declared_event.root_task_id {
+        return Err(LoomEventError::MismatchedArtifactReady {
+            ready_event_id: ready_event.event_id,
+            declared_event_id: declared_event.event_id,
+            field: "root_task_id",
+        });
+    }
+
+    if ready_event.correlation_id != declared_event.correlation_id {
+        return Err(LoomEventError::MismatchedArtifactReady {
+            ready_event_id: ready_event.event_id,
+            declared_event_id: declared_event.event_id,
+            field: "correlation_id",
+        });
+    }
+
+    if ready_event.payload_ref != declared_event.payload_ref {
+        return Err(LoomEventError::MismatchedArtifactReady {
+            ready_event_id: ready_event.event_id,
+            declared_event_id: declared_event.event_id,
             field: "payload_ref",
         });
     }
@@ -568,6 +638,11 @@ pub enum LoomEventError {
         route_decision_event_id: u64,
         field: &'static str,
     },
+    MismatchedArtifactReady {
+        ready_event_id: u64,
+        declared_event_id: u64,
+        field: &'static str,
+    },
     InvalidRouteDecisionTelemetry {
         event_id: u64,
         field: &'static str,
@@ -634,6 +709,14 @@ impl std::fmt::Display for LoomEventError {
             } => write!(
                 f,
                 "assignment event {assignment_event_id} references route decision event {route_decision_event_id} with mismatched {field}"
+            ),
+            Self::MismatchedArtifactReady {
+                ready_event_id,
+                declared_event_id,
+                field,
+            } => write!(
+                f,
+                "artifact ready event {ready_event_id} references declaration event {declared_event_id} with mismatched {field}"
             ),
             Self::InvalidRouteDecisionTelemetry { event_id, field } => {
                 write!(f, "route decision event {event_id} has invalid {field}")
