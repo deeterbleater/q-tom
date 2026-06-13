@@ -1,9 +1,12 @@
 use std::fs;
+use std::path::PathBuf;
 
 use qtom_core::{
     InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, MockTaskLoom, ReplayCursor,
     append_event_log_jsonl, loom_replay_report, read_event_log_jsonl, write_event_log_jsonl,
 };
+
+const GOLDEN_MOCK_LOOM_LOG: &str = "tests/fixtures/mock_loom_event_log.jsonl";
 
 fn temp_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
@@ -11,6 +14,10 @@ fn temp_path(name: &str) -> std::path::PathBuf {
         std::process::id(),
         std::thread::current().name().unwrap_or("test")
     ))
+}
+
+fn repo_fixture_path(relative_path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path)
 }
 
 fn event(event_type: LoomEventType, event_id: u64, task_id: u64) -> LoomEvent {
@@ -140,4 +147,33 @@ fn jsonl_round_trip_preserves_full_mock_replay_report() {
         loom_replay_report(&loaded).expect("loaded mock log should replay after persistence");
 
     assert_eq!(loaded_report, expected_report);
+}
+
+#[test]
+fn golden_mock_loom_event_log_matches_current_replay_report() {
+    let path = repo_fixture_path(GOLDEN_MOCK_LOOM_LOG);
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+    let temp = temp_path("golden-mock-log");
+
+    write_event_log_jsonl(&temp, output.event_log.replay(ReplayCursor::start()))
+        .expect("jsonl write should succeed");
+    let generated = fs::read_to_string(&temp).expect("generated jsonl should exist");
+    fs::remove_file(&temp).ok();
+
+    let expected = fs::read_to_string(&path).expect("golden mock loom log should exist");
+    assert_eq!(generated, expected);
+
+    let loaded = read_event_log_jsonl(&path).expect("golden mock loom log should load");
+    let report = loom_replay_report(&loaded).expect("golden mock loom log should replay");
+
+    assert_eq!(report.validation.route_decision_count, 2);
+    assert_eq!(report.validation.memory_node_count, 2);
+    assert!(
+        report
+            .projections
+            .integration_group
+            .contains("integration_group_10 --> integration_report_3000")
+    );
 }
