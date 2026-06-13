@@ -329,8 +329,8 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut memory_node_count = 0;
     let mut topology_commit_count = 0;
     let mut integration_request_count = 0;
-    let mut completed_task_ids = HashSet::new();
-    let mut decommissioned_task_ids = HashSet::new();
+    let mut completed_task_events_by_task_id = HashMap::new();
+    let mut decommission_events_by_task_id = HashMap::new();
     let mut child_task_events = Vec::new();
     let mut integration_events_by_parent_task_id = HashMap::new();
 
@@ -364,13 +364,13 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             LoomEventType::TaskCompleted => {
                 completion_count += 1;
                 if let Some(task_id) = event.task_id {
-                    completed_task_ids.insert(task_id);
+                    completed_task_events_by_task_id.insert(task_id, event.clone());
                 }
             }
             LoomEventType::AgentDecommissioned => {
                 decommission_count += 1;
                 if let Some(task_id) = event.task_id {
-                    decommissioned_task_ids.insert(task_id);
+                    decommission_events_by_task_id.insert(task_id, event.clone());
                 }
             }
             LoomEventType::MemoryNodeCreated => memory_node_count += 1,
@@ -410,13 +410,19 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         &integration_events_by_parent_task_id,
     )?;
 
-    if let Some(task_id) = completed_task_ids
-        .difference(&decommissioned_task_ids)
+    if let Some(task_id) = completed_task_events_by_task_id
+        .keys()
+        .filter(|task_id| !decommission_events_by_task_id.contains_key(task_id))
         .min()
         .copied()
     {
         return Err(LoomEventError::MissingTaskDecommission { task_id });
     }
+
+    validate_task_decommission_context(
+        &completed_task_events_by_task_id,
+        &decommission_events_by_task_id,
+    )?;
 
     Ok(ReplayValidationReport {
         event_count: events.len(),
@@ -430,6 +436,44 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         topology_commit_count,
         integration_request_count,
     })
+}
+
+fn validate_task_decommission_context(
+    completed_task_events_by_task_id: &HashMap<u64, LoomEvent>,
+    decommission_events_by_task_id: &HashMap<u64, LoomEvent>,
+) -> Result<(), LoomEventError> {
+    let mut task_ids = completed_task_events_by_task_id
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+    task_ids.sort_unstable();
+
+    for task_id in task_ids {
+        let Some(completed_event) = completed_task_events_by_task_id.get(&task_id) else {
+            continue;
+        };
+        let Some(decommission_event) = decommission_events_by_task_id.get(&task_id) else {
+            continue;
+        };
+
+        if completed_event.root_task_id != decommission_event.root_task_id {
+            return Err(LoomEventError::MismatchedTaskDecommission {
+                task_id,
+                decommission_event_id: decommission_event.event_id,
+                field: "root_task_id",
+            });
+        }
+
+        if completed_event.correlation_id != decommission_event.correlation_id {
+            return Err(LoomEventError::MismatchedTaskDecommission {
+                task_id,
+                decommission_event_id: decommission_event.event_id,
+                field: "correlation_id",
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_child_task_integration_context(
@@ -671,6 +715,11 @@ pub enum LoomEventError {
     MissingTaskDecommission {
         task_id: u64,
     },
+    MismatchedTaskDecommission {
+        task_id: u64,
+        decommission_event_id: u64,
+        field: &'static str,
+    },
     MissingTaskRouteDecision {
         task_id: u64,
     },
@@ -742,6 +791,14 @@ impl std::fmt::Display for LoomEventError {
             Self::MissingTaskDecommission { task_id } => {
                 write!(f, "completed task {task_id} is missing decommission event")
             }
+            Self::MismatchedTaskDecommission {
+                task_id,
+                decommission_event_id,
+                field,
+            } => write!(
+                f,
+                "completed task {task_id} references decommission event {decommission_event_id} with mismatched {field}"
+            ),
             Self::MissingTaskRouteDecision { task_id } => {
                 write!(f, "assigned task {task_id} is missing route decision event")
             }

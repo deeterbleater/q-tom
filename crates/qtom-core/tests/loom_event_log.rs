@@ -444,6 +444,55 @@ fn replay_validation_accepts_completed_task_with_decommission() {
 }
 
 #[test]
+fn replay_validation_rejects_completed_task_with_decommission_from_different_root() {
+    let mut decommissioned = with_root_task(event(LoomEventType::AgentDecommissioned, 3, 10), 2);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        event(LoomEventType::TaskCompleted, 2, 10),
+        decommissioned,
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("completed task should require decommission from same root");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedTaskDecommission {
+            task_id: 10,
+            decommission_event_id: 3,
+            field: "root_task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_completed_task_with_decommission_from_different_correlation() {
+    let mut decommissioned =
+        with_correlation(event(LoomEventType::AgentDecommissioned, 3, 10), 100);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        event(LoomEventType::TaskCompleted, 2, 10),
+        decommissioned,
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("completed task should require decommission from same correlation");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedTaskDecommission {
+            task_id: 10,
+            decommission_event_id: 3,
+            field: "correlation_id",
+        }
+    );
+}
+
+#[test]
 fn replay_validation_rejects_assignment_without_route_decision_in_slice() {
     let events = vec![
         event(LoomEventType::TaskCreated, 1, 10),
