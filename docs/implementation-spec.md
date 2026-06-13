@@ -15,6 +15,8 @@ The prototype exists to answer one question first:
 
 The first implementation should be narrow. It should prove or disprove the routing mechanism before the larger middleware ecosystem is designed around it.
 
+The larger middleware ecosystem is now described as an async task loom in `docs/agent-task-loom.md`. Its design shorthand is SBJR: Director Agents Split work, Constructor Agents Build granular deliverables, Integration Agents Join completed threads, and Curator Agents Remember decommissioned telemetry and lessons. The routing layer remains the exact scoring substrate underneath that loom.
+
 ## 2. Current Assumptions
 
 - An "agent" is a routable execution profile. In the full system it may include model provider, model family, prompt profile, tool bundle, MCP library set, memory set, and higher-level worker behavior. In Prototype 1, the model variable is fixed to a local `Qwen3-2507` profile, and the agent varies by prompt/tool/MCP/memory profile.
@@ -28,6 +30,10 @@ The first implementation should be narrow. It should prove or disprove the routi
 - Prototype 1 starts at 128 agents and scales by factors of 8: `128`, `1024`, `8192`, and later `65536` for stress testing if the earlier stages justify it.
 - Routing returns a ranked top-k list, not only one winner. The default prototype value is `k = 8`.
 - The middleware is expected to batch routing requests naturally. Single-task routing is still benchmarked, but batch routing is the default operating mode.
+- The larger orchestration system is async-only by default. Tasks are graph nodes, not stack frames; cross-agent boundaries are message or event based; synchronous waits are allowed only at explicit join points.
+- Director Agents decompose prompts into granular traceable tasks. Constructor Agents execute those tasks. Integration Agents join deliverables and can request follow-up work from the Director swarm. Curator Agents ingest decommission packets into memory nodes and shared gradient spaces.
+- Every granular task must trace back to its source prompt, parent task, plan, producing Director Agent, executing Constructor Agent, integration group, decommission packet, and curated memory nodes.
+- Loom I/O should capture enough typed graph metadata to construct class diagrams, signal diagrams, task dependency diagrams, handoff diagrams, memory lineage diagrams, and artifact provenance diagrams on demand, while storing heavy content only by reference unless replay, audit, integration, or curation requires it.
 - Benchmark scoring is LLM-graded from the start, because production benchmark updates are expected to come from an agent-driven evaluation pipeline. The intended evaluator is GPT-5.5 Medium via API, represented in configuration as an evaluator model string so the implementation can adapt to the exact API identifier available at runtime.
 - Prototype 1 targets local agents first. Remote API inference is deferred until the local routing concept is validated or shown to need a different design.
 - Substitute quality is judged geometrically at first: a substitute is better when it remains close to the selected region of the capability gradient.
@@ -162,7 +168,20 @@ lossy prefilter: O(candidate_count), where candidate_count << agent_count
 
 The expected tradeoff is scale-dependent. At `8192` agents, the current full CPU scan is likely faster than maintaining and querying a projection layer. At `65536+` agents, and especially for cluster-sized swarms, deterministic lossy candidate generation may become the main path to lower p99 latency.
 
-For conversational memory, the same shape applies: raw logs remain canonical, but curator agents should derive compact memory-node candidate sets before exact routing. The `--cuda-scale` probe treats agent count as a proxy for curated candidate-set size and shows exact CUDA scoring remains roughly linear in that count, so reducing the candidate set is a first-class performance lever.
+For conversational memory, the same shape applies: raw logs remain canonical, but Curator Agents should derive compact memory-node candidate sets before exact routing. The `--cuda-scale` probe treats agent count as a proxy for curated candidate-set size and shows exact CUDA scoring remains roughly linear in that count, so reducing the candidate set is a first-class performance lever.
+
+The first layered prefilter benchmark shows the important distinction between candidate quality and retrieval mechanics. Adding a third projection dimension and stacking independent projections improves recall substantially, but naive query-time grid expansion is too expensive. The durable architecture should keep the multi-view idea while replacing arbitrary vector slices with shared ordered gradient spaces curated from task, memory, artifact, user-preference, and tool-affordance signals.
+
+In the full loom, memory candidate generation should look more like:
+
+```text
+raw logs and decommission packets
+  -> Curator Agents derive typed memory nodes
+  -> nodes are placed in versioned shared GradientSpaces
+  -> each GradientSpace proposes local candidate neighborhoods
+  -> exact Q-TOM scoring ranks the union
+  -> Integration and Constructor Agents hydrate only the context they need
+```
 
 The design must remain replayable. Tie handling, cell expansion order, hysteresis bands, and fallback behavior should be deterministic for the same fixture and live-state snapshot. The intended fuzziness is geometric and state-quantized, not random.
 

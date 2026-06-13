@@ -19,6 +19,8 @@ The current implementation is the Phase 0/1 truth source:
 
 CUDA is intentionally gated behind CPU parity. The CPU route is the correctness oracle for the RTX 4060 backend, and the public CUDA router currently opens only the narrow `k = 1` path when `cuda-runtime` is enabled and the NVIDIA driver initializes. CUDA runtime and kernel work must follow the safety constraints in `docs/cuda-safety.md`.
 
+The larger orchestration architecture is described in `docs/agent-task-loom.md`. Its design spine is SBJR: Director Agents Split work, Constructor Agents Build granular deliverables, Integration Agents Join completed threads, and Curator Agents Remember decommissioned telemetry and lessons. Async concurrency is the default operating model at every layer.
+
 ## Current Prototype Decisions
 
 - Local-first orchestration target

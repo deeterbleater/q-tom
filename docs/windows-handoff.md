@@ -81,6 +81,7 @@ crates/qtom-cuda/src/lib.rs         CUDA scaffold, buffer plan, copies, and laun
 crates/qtom-cuda/kernels/route_agents.cu  k=1 CUDA kernel source
 crates/qtom-cuda/kernels/route_agents.ptx checked-in PTX artifact
 crates/qtom-bench/src/main.rs       benchmark and fixture CLI
+docs/agent-task-loom.md             SBJR async swarm orchestration architecture
 docs/cuda-safety.md                 CUDA memory-safety constraints
 docs/cuda-toolchain.md              CUDA feature/toolchain notes
 docs/implementation-spec.md         architecture and roadmap
@@ -148,6 +149,10 @@ agents   cuda-reuse avg ms   device ms   speedup vs CPU parallel
 
 This supports the memory-curation architecture: exact CUDA scoring is useful, but the strongest lever is handing it compact curated candidate sets rather than asking every request to scan the whole archive.
 
+Recent `--candidate-prefilter-profile` results show that adding a third projection dimension and stacking independent projections improves recall substantially, but naive query-time grid expansion is too slow to be the production retrieval mechanism. Keep the multi-view candidate-generation idea, but prefer shared curated gradient spaces, shortlist tables, semantic/inverted keys, or approximate-nearest structures over arbitrary raw vector slices.
+
+The larger architecture is now captured in `docs/agent-task-loom.md`: SBJR means Director Agents Split work, Constructor Agents Build granular deliverables, Integration Agents Join completed threads, and Curator Agents Remember decommissioned telemetry and lessons. Async concurrency is the default at every layer. Loom I/O must preserve enough typed graph metadata to generate class, signal, task, handoff, memory lineage, and artifact provenance diagrams without storing heavy content unnecessarily.
+
 ## Design Constraints
 
 - CPU remains the correctness oracle.
@@ -157,6 +162,9 @@ This supports the memory-curation architecture: exact CUDA scoring is useful, bu
 - Start with `k = 1`, one CUDA thread routing one task against all agents.
 - Do not optimize until CPU/GPU parity is proven.
 - Lossy deterministic candidate generation and memory curation are scale features, but the `--cuda-scale` curve says they are central to the architecture rather than decorative.
+- SBJR is the conceptual orchestration layer above Q-TOM routing: Split, Build, Join, Remember.
+- Every decomposition needs an integration path, and every completed agent needs a decommission path into memory curation.
+- Loom telemetry should store lineage, status, timing, schemas, hashes, and artifact references by default; store heavy content only when replay, audit, integration, or curation requires it.
 
 ## Next Task
 
