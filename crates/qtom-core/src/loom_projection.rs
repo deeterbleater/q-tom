@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write;
 
-use crate::{InMemoryEventLog, LoomEvent, LoomEventType, ReplayCursor};
+use crate::{
+    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, ReplayCursor,
+    ReplayValidationReport,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoomProjectionBundle {
@@ -21,6 +24,26 @@ pub fn loom_projection_bundle(log: &InMemoryEventLog) -> LoomProjectionBundle {
         integration_group: integration_group_projection(log),
         memory_lineage: memory_lineage_projection(log),
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoomReplayReport {
+    pub validation: ReplayValidationReport,
+    pub projections: LoomProjectionBundle,
+}
+
+pub fn loom_replay_report(log: &InMemoryEventLog) -> Result<LoomReplayReport, LoomEventError> {
+    if log.is_empty() {
+        return Err(LoomEventError::EmptyReplayLog);
+    }
+
+    let validation = log.validate_replay()?;
+    let projections = loom_projection_bundle(log);
+
+    Ok(LoomReplayReport {
+        validation,
+        projections,
+    })
 }
 
 pub fn route_trace_projection(log: &InMemoryEventLog) -> String {

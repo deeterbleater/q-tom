@@ -728,6 +728,7 @@ fn required_cause(event_type: LoomEventType) -> Option<LoomEventType> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoomEventError {
+    EmptyReplayLog,
     DuplicateEventId(u64),
     MissingPayloadSchema,
     MissingPayloadRef,
@@ -801,6 +802,7 @@ pub enum LoomEventError {
 impl std::fmt::Display for LoomEventError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EmptyReplayLog => write!(f, "loom replay log is empty"),
             Self::DuplicateEventId(event_id) => {
                 write!(f, "duplicate loom event id {event_id}")
             }

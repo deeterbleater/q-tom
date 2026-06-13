@@ -1,7 +1,7 @@
 use qtom_core::{
-    MockTaskLoom, artifact_provenance_projection, integration_group_projection,
-    loom_projection_bundle, memory_lineage_projection, route_trace_projection,
-    task_dependency_projection,
+    InMemoryEventLog, LoomEventError, MockTaskLoom, artifact_provenance_projection,
+    integration_group_projection, loom_projection_bundle, loom_replay_report,
+    memory_lineage_projection, route_trace_projection, task_dependency_projection,
 };
 
 #[test]
@@ -142,4 +142,39 @@ fn projection_bundle_is_stable_for_same_replayed_log() {
     let second = loom_projection_bundle(&output.event_log);
 
     assert_eq!(first, second);
+}
+
+#[test]
+fn replay_report_validates_and_projects_full_mock_run() {
+    let output = MockTaskLoom::default()
+        .run_prompt(7, 10, "prototype the routing boundary")
+        .expect("mock SBJR flow should run");
+
+    let report = loom_replay_report(&output.event_log).expect("mock run should replay");
+
+    assert_eq!(report.validation.route_decision_count, 2);
+    assert_eq!(report.validation.assignment_count, 2);
+    assert_eq!(report.validation.decommission_count, 2);
+    assert_eq!(report.validation.memory_node_count, 2);
+    assert!(
+        report
+            .projections
+            .route_trace
+            .contains("route_100 --> assignment_101")
+    );
+    assert!(
+        report
+            .projections
+            .memory_lineage
+            .contains("decommission_2003 --> memory_4000")
+    );
+}
+
+#[test]
+fn replay_report_rejects_invalid_log_before_projecting() {
+    let log = InMemoryEventLog::new();
+
+    let err = loom_replay_report(&log).expect_err("empty replay should fail missing routes");
+
+    assert_eq!(err, LoomEventError::EmptyReplayLog);
 }
