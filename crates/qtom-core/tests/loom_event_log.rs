@@ -738,6 +738,77 @@ fn replay_validation_accepts_memory_node_with_decommission_evidence() {
 }
 
 #[test]
+fn replay_validation_rejects_memory_node_with_different_task_evidence() {
+    let mut decommissioned = event(LoomEventType::AgentDecommissioned, 1, 11);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        decommissioned,
+        caused_by(event(LoomEventType::MemoryNodeCreated, 2, 10), 1),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("memory node should match decommission task context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedMemoryEvidence {
+            memory_event_id: 2,
+            decommission_event_id: 1,
+            field: "task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_memory_node_with_different_root_evidence() {
+    let mut decommissioned =
+        with_root_task(event(LoomEventType::AgentDecommissioned, 1, 10), 2);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        decommissioned,
+        caused_by(event(LoomEventType::MemoryNodeCreated, 2, 10), 1),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("memory node should match decommission root context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedMemoryEvidence {
+            memory_event_id: 2,
+            decommission_event_id: 1,
+            field: "root_task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_memory_node_with_different_correlation_evidence() {
+    let mut decommissioned =
+        with_correlation(event(LoomEventType::AgentDecommissioned, 1, 10), 100);
+    decommissioned.agent_id = Some(42);
+
+    let events = vec![
+        decommissioned,
+        caused_by(event(LoomEventType::MemoryNodeCreated, 2, 10), 1),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("memory node should match decommission correlation context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedMemoryEvidence {
+            memory_event_id: 2,
+            decommission_event_id: 1,
+            field: "correlation_id",
+        }
+    );
+}
+
+#[test]
 fn replay_validation_rejects_child_task_without_integration_path() {
     let events = vec![
         event(LoomEventType::TaskCreated, 1, 10),

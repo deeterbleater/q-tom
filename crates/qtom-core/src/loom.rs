@@ -521,14 +521,45 @@ fn validate_memory_evidence(
         });
     };
 
-    let has_decommission_evidence = replay_log.events.iter().any(|candidate| {
+    let Some(decommission_event) = replay_log.events.iter().find(|candidate| {
         candidate.event_id == causation_id
             && candidate.event_type == LoomEventType::AgentDecommissioned
-    });
-
-    if !has_decommission_evidence {
+    }) else {
         return Err(LoomEventError::MissingMemoryEvidence {
             event_id: event.event_id,
+        });
+    };
+
+    validate_memory_evidence_context(event, decommission_event)?;
+
+    Ok(())
+}
+
+fn validate_memory_evidence_context(
+    memory_event: &LoomEvent,
+    decommission_event: &LoomEvent,
+) -> Result<(), LoomEventError> {
+    if memory_event.task_id != decommission_event.task_id {
+        return Err(LoomEventError::MismatchedMemoryEvidence {
+            memory_event_id: memory_event.event_id,
+            decommission_event_id: decommission_event.event_id,
+            field: "task_id",
+        });
+    }
+
+    if memory_event.root_task_id != decommission_event.root_task_id {
+        return Err(LoomEventError::MismatchedMemoryEvidence {
+            memory_event_id: memory_event.event_id,
+            decommission_event_id: decommission_event.event_id,
+            field: "root_task_id",
+        });
+    }
+
+    if memory_event.correlation_id != decommission_event.correlation_id {
+        return Err(LoomEventError::MismatchedMemoryEvidence {
+            memory_event_id: memory_event.event_id,
+            decommission_event_id: decommission_event.event_id,
+            field: "correlation_id",
         });
     }
 
@@ -744,6 +775,11 @@ pub enum LoomEventError {
     MissingMemoryEvidence {
         event_id: u64,
     },
+    MismatchedMemoryEvidence {
+        memory_event_id: u64,
+        decommission_event_id: u64,
+        field: &'static str,
+    },
     MissingTaskIntegration {
         task_id: u64,
     },
@@ -831,6 +867,14 @@ impl std::fmt::Display for LoomEventError {
             Self::MissingMemoryEvidence { event_id } => {
                 write!(f, "memory node event {event_id} is missing evidence")
             }
+            Self::MismatchedMemoryEvidence {
+                memory_event_id,
+                decommission_event_id,
+                field,
+            } => write!(
+                f,
+                "memory node event {memory_event_id} references decommission event {decommission_event_id} with mismatched {field}"
+            ),
             Self::MissingTaskIntegration { task_id } => {
                 write!(f, "child task {task_id} is missing integration path")
             }
