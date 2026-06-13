@@ -335,6 +335,10 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             validate_memory_evidence(event, &replay_log)?;
         }
 
+        if matches!(event.event_type, LoomEventType::RouteDecisionRecorded) {
+            validate_route_decision_telemetry(event)?;
+        }
+
         replay_log.append(event.clone())?;
         root_task_ids.insert(event.root_task_id);
 
@@ -430,6 +434,24 @@ fn validate_memory_evidence(
     Ok(())
 }
 
+fn validate_route_decision_telemetry(event: &LoomEvent) -> Result<(), LoomEventError> {
+    if event.payload_schema != "qtom.route_decision.v1" {
+        return Err(LoomEventError::InvalidRouteDecisionTelemetry {
+            event_id: event.event_id,
+            field: "payload_schema",
+        });
+    }
+
+    if !event.payload_ref.starts_with("inline://route-decision/") {
+        return Err(LoomEventError::InvalidRouteDecisionTelemetry {
+            event_id: event.event_id,
+            field: "payload_ref",
+        });
+    }
+
+    Ok(())
+}
+
 fn validate_assignment_route_decision(
     event: &LoomEvent,
     replay_log: &InMemoryEventLog,
@@ -499,6 +521,10 @@ pub enum LoomEventError {
     MissingTaskRouteDecision {
         task_id: u64,
     },
+    InvalidRouteDecisionTelemetry {
+        event_id: u64,
+        field: &'static str,
+    },
     MissingMemoryEvidence {
         event_id: u64,
     },
@@ -546,6 +572,9 @@ impl std::fmt::Display for LoomEventError {
             }
             Self::MissingTaskRouteDecision { task_id } => {
                 write!(f, "assigned task {task_id} is missing route decision event")
+            }
+            Self::InvalidRouteDecisionTelemetry { event_id, field } => {
+                write!(f, "route decision event {event_id} has invalid {field}")
             }
             Self::MissingMemoryEvidence { event_id } => {
                 write!(f, "memory node event {event_id} is missing evidence")

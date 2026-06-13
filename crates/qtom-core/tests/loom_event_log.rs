@@ -21,6 +21,13 @@ fn event(event_type: LoomEventType, event_id: u64, task_id: u64) -> LoomEvent {
     }
 }
 
+fn route_decision_event(event_id: u64, task_id: u64) -> LoomEvent {
+    let mut event = event(LoomEventType::RouteDecisionRecorded, event_id, task_id);
+    event.payload_schema = "qtom.route_decision.v1".to_string();
+    event.payload_ref = format!("inline://route-decision/{event_id}");
+    event
+}
+
 fn caused_by(mut event: LoomEvent, causation_id: u64) -> LoomEvent {
     event.causation_id = Some(causation_id);
     event
@@ -37,7 +44,7 @@ fn event_log_appends_and_replays_in_order() {
 
     log.append(event(LoomEventType::TaskCreated, 1, 10))
         .expect("first event should append");
-    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+    log.append(route_decision_event(2, 10))
         .expect("second event should append");
     log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("third event should append");
@@ -45,7 +52,10 @@ fn event_log_appends_and_replays_in_order() {
     let replayed: Vec<_> = log.replay(ReplayCursor::start()).collect();
 
     assert_eq!(
-        replayed.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+        replayed
+            .iter()
+            .map(|event| event.event_id)
+            .collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
     assert_eq!(log.len(), 3);
@@ -57,7 +67,7 @@ fn event_log_filters_by_type_without_reordering() {
 
     log.append(event(LoomEventType::TaskCreated, 1, 10))
         .expect("task_created should append");
-    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+    log.append(route_decision_event(2, 10))
         .expect("route_decision_recorded should append");
     log.append(event(LoomEventType::TaskCreated, 3, 11))
         .expect("second task_created should append");
@@ -105,7 +115,7 @@ fn replay_cursor_starts_after_seen_events() {
 
     log.append(event(LoomEventType::TaskCreated, 1, 10))
         .expect("first event should append");
-    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+    log.append(route_decision_event(2, 10))
         .expect("second event should append");
     log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("third event should append");
@@ -113,7 +123,10 @@ fn replay_cursor_starts_after_seen_events() {
     let replayed: Vec<_> = log.replay(ReplayCursor::after(2)).collect();
 
     assert_eq!(
-        replayed.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+        replayed
+            .iter()
+            .map(|event| event.event_id)
+            .collect::<Vec<_>>(),
         vec![3]
     );
 }
@@ -146,7 +159,7 @@ fn task_assignment_accepts_route_decision_cause() {
 
     log.append(event(LoomEventType::TaskCreated, 1, 10))
         .expect("task_created should append");
-    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+    log.append(route_decision_event(2, 10))
         .expect("route_decision_recorded should append");
     log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("task_assigned should accept route decision causation");
@@ -246,7 +259,7 @@ fn replay_validation_reports_event_counts() {
 
     log.append(event(LoomEventType::TaskCreated, 1, 10))
         .expect("task_created should append");
-    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+    log.append(route_decision_event(2, 10))
         .expect("route_decision_recorded should append");
     log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("task_assigned should append");
@@ -264,7 +277,7 @@ fn replay_validation_reports_lifecycle_counts() {
 
     log.append(event(LoomEventType::TaskCreated, 1, 10))
         .expect("task_created should append");
-    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+    log.append(route_decision_event(2, 10))
         .expect("route_decision_recorded should append");
     log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
         .expect("task_assigned should append");
@@ -334,10 +347,7 @@ fn replay_validation_rejects_completed_task_without_decommission() {
 
     let err = validate_events(&events).expect_err("completed task should require decommission");
 
-    assert_eq!(
-        err,
-        LoomEventError::MissingTaskDecommission { task_id: 10 }
-    );
+    assert_eq!(err, LoomEventError::MissingTaskDecommission { task_id: 10 });
 }
 
 #[test]
@@ -366,14 +376,17 @@ fn replay_validation_rejects_assignment_without_route_decision_in_slice() {
 
     let err = validate_events(&events).expect_err("assigned task should require route decision");
 
-    assert_eq!(err, LoomEventError::MissingTaskRouteDecision { task_id: 10 });
+    assert_eq!(
+        err,
+        LoomEventError::MissingTaskRouteDecision { task_id: 10 }
+    );
 }
 
 #[test]
 fn replay_validation_accepts_assignment_with_route_decision() {
     let events = vec![
         event(LoomEventType::TaskCreated, 1, 10),
-        event(LoomEventType::RouteDecisionRecorded, 2, 10),
+        route_decision_event(2, 10),
         caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2),
     ];
 
@@ -384,15 +397,48 @@ fn replay_validation_accepts_assignment_with_route_decision() {
 }
 
 #[test]
+fn replay_validation_rejects_route_decision_with_wrong_schema() {
+    let mut route_decision = event(LoomEventType::RouteDecisionRecorded, 2, 10);
+    route_decision.payload_schema = "test.payload.v1".to_string();
+    route_decision.payload_ref = "inline://route-decision/501".to_string();
+    let events = vec![event(LoomEventType::TaskCreated, 1, 10), route_decision];
+
+    let err = validate_events(&events).expect_err("route decision schema should be exact");
+
+    assert_eq!(
+        err,
+        LoomEventError::InvalidRouteDecisionTelemetry {
+            event_id: 2,
+            field: "payload_schema",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_route_decision_with_wrong_payload_ref() {
+    let mut route_decision = event(LoomEventType::RouteDecisionRecorded, 2, 10);
+    route_decision.payload_schema = "qtom.route_decision.v1".to_string();
+    route_decision.payload_ref = "inline://event/2".to_string();
+    let events = vec![event(LoomEventType::TaskCreated, 1, 10), route_decision];
+
+    let err = validate_events(&events).expect_err("route decision payload ref should be exact");
+
+    assert_eq!(
+        err,
+        LoomEventError::InvalidRouteDecisionTelemetry {
+            event_id: 2,
+            field: "payload_ref",
+        }
+    );
+}
+
+#[test]
 fn replay_validation_rejects_memory_node_without_evidence() {
     let events = vec![event(LoomEventType::MemoryNodeCreated, 1, 10)];
 
     let err = validate_events(&events).expect_err("memory node should require evidence");
 
-    assert_eq!(
-        err,
-        LoomEventError::MissingMemoryEvidence { event_id: 1 }
-    );
+    assert_eq!(err, LoomEventError::MissingMemoryEvidence { event_id: 1 });
 }
 
 #[test]
