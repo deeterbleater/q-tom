@@ -277,6 +277,60 @@ fn mvp_roadmap_covers_build_phases() {
 }
 
 #[test]
+fn realization_plan_covers_execution_path() {
+    let plan_path = repo_root().join("docs/realization-plan.md");
+    let plan = fs::read_to_string(&plan_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", plan_path.display()));
+    let plan = plan.to_lowercase();
+
+    let required_tracks = [
+        "routing track",
+        "loom track",
+        "memory track",
+        "governance track",
+    ];
+
+    for track in required_tracks {
+        assert!(
+            plan.contains(track),
+            "realization plan should cover `{track}`"
+        );
+    }
+
+    let required_gates = [
+        "route parity",
+        "route explainability",
+        "loom replay",
+        "join correctness",
+        "memory evidence",
+        "candidate reduction",
+        "local agent usefulness",
+        "governance safety",
+    ];
+
+    for gate in required_gates {
+        assert!(
+            plan.contains(gate),
+            "realization plan should define evidence gate `{gate}`"
+        );
+    }
+
+    let required_terms = [
+        "formal architecture",
+        "architecture promotion checklist",
+        "near-term build order",
+        "route decisions -> assignment causation -> replay projection -> validation gate",
+    ];
+
+    for term in required_terms {
+        assert!(
+            plan.contains(term),
+            "realization plan should include `{term}`"
+        );
+    }
+}
+
+#[test]
 fn architecture_doc_consolidates_outline() {
     let architecture_path = repo_root().join("docs/architecture.md");
     let architecture = fs::read_to_string(&architecture_path)
@@ -320,6 +374,7 @@ fn architecture_doc_consolidates_outline() {
         "docs/lifecycle-flows.md",
         "docs/topology-governance.md",
         "docs/mvp-roadmap.md",
+        "docs/realization-plan.md",
     ];
 
     for doc in supporting_docs {

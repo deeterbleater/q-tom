@@ -28,6 +28,7 @@ Supporting docs:
 - `docs/lifecycle-flows.md`
 - `docs/topology-governance.md`
 - `docs/mvp-roadmap.md`
+- `docs/realization-plan.md`
 
 ## 2. Problem Statement
 
