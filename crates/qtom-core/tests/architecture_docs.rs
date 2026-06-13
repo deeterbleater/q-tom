@@ -331,6 +331,45 @@ fn realization_plan_covers_execution_path() {
 }
 
 #[test]
+fn formal_architecture_process_covers_promotion_gates() {
+    let process_path = repo_root().join("docs/formal-architecture-process.md");
+    let process = fs::read_to_string(&process_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", process_path.display()));
+    let process = process.to_lowercase();
+
+    let required_gates = [
+        "routing gate",
+        "replay gate",
+        "lineage gate",
+        "memory candidate gate",
+        "local agent gate",
+        "governance gate",
+    ];
+
+    for gate in required_gates {
+        assert!(
+            process.contains(gate),
+            "formal architecture process should define `{gate}`"
+        );
+    }
+
+    let required_terms = [
+        "promotion rules",
+        "work products",
+        "evidence gates",
+        "decision log",
+        "route decision causation -> replay validation -> projection evidence -> mvp review gate",
+    ];
+
+    for term in required_terms {
+        assert!(
+            process.contains(term),
+            "formal architecture process should include `{term}`"
+        );
+    }
+}
+
+#[test]
 fn local_agent_readiness_covers_runtime_gate() {
     let readiness_path = repo_root().join("docs/local-agent-readiness.md");
     let readiness = fs::read_to_string(&readiness_path)
@@ -435,6 +474,7 @@ fn architecture_doc_consolidates_outline() {
         "docs/topology-governance.md",
         "docs/mvp-roadmap.md",
         "docs/realization-plan.md",
+        "docs/formal-architecture-process.md",
         "docs/local-agent-readiness.md",
         "docs/mvp-review-gate.md",
     ];

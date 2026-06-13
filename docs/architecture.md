@@ -29,6 +29,7 @@ Supporting docs:
 - `docs/topology-governance.md`
 - `docs/mvp-roadmap.md`
 - `docs/realization-plan.md`
+- `docs/formal-architecture-process.md`
 - `docs/local-agent-readiness.md`
 - `docs/mvp-review-gate.md`
 
@@ -389,6 +390,8 @@ The MVP plan is:
 The MVP acceptance bar is a complete local mock run that can be replayed from events and topology snapshots.
 
 See `docs/mvp-roadmap.md`.
+
+The process for promoting design intent into working architecture is defined in `docs/formal-architecture-process.md`.
 
 ## 19. Risks And Open Questions
 
