@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -331,8 +331,8 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut integration_request_count = 0;
     let mut completed_task_ids = HashSet::new();
     let mut decommissioned_task_ids = HashSet::new();
-    let mut child_task_edges = Vec::new();
-    let mut integration_parent_task_ids = HashSet::new();
+    let mut child_task_events = Vec::new();
+    let mut integration_events_by_parent_task_id = HashMap::new();
 
     for event in events {
         if matches!(event.event_type, LoomEventType::TaskAssigned) {
@@ -378,27 +378,37 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             LoomEventType::IntegrationRequested => {
                 integration_request_count += 1;
                 if let Some(task_id) = event.task_id {
-                    integration_parent_task_ids.insert(task_id);
+                    integration_events_by_parent_task_id.insert(task_id, event.clone());
                 }
             }
             LoomEventType::TaskCreated => {
-                if let (Some(task_id), Some(parent_task_id)) = (event.task_id, event.parent_task_id)
-                {
-                    child_task_edges.push((task_id, parent_task_id));
+                if event.parent_task_id.is_some() {
+                    child_task_events.push(event.clone());
                 }
             }
             _ => {}
         }
     }
 
-    if let Some((task_id, _parent_task_id)) = child_task_edges
+    if let Some(child_task) = child_task_events
         .iter()
-        .filter(|(_task_id, parent_task_id)| !integration_parent_task_ids.contains(parent_task_id))
-        .min_by_key(|(task_id, _parent_task_id)| *task_id)
-        .copied()
+        .filter(|event| {
+            let Some(parent_task_id) = event.parent_task_id else {
+                return false;
+            };
+            !integration_events_by_parent_task_id.contains_key(&parent_task_id)
+        })
+        .min_by_key(|event| event.task_id.unwrap_or_default())
     {
-        return Err(LoomEventError::MissingTaskIntegration { task_id });
+        return Err(LoomEventError::MissingTaskIntegration {
+            task_id: child_task.task_id.unwrap_or_default(),
+        });
     }
+
+    validate_child_task_integration_context(
+        &child_task_events,
+        &integration_events_by_parent_task_id,
+    )?;
 
     if let Some(task_id) = completed_task_ids
         .difference(&decommissioned_task_ids)
@@ -420,6 +430,41 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         topology_commit_count,
         integration_request_count,
     })
+}
+
+fn validate_child_task_integration_context(
+    child_task_events: &[LoomEvent],
+    integration_events_by_parent_task_id: &HashMap<u64, LoomEvent>,
+) -> Result<(), LoomEventError> {
+    for child_task in child_task_events {
+        let Some(parent_task_id) = child_task.parent_task_id else {
+            continue;
+        };
+        let Some(integration_event) = integration_events_by_parent_task_id.get(&parent_task_id)
+        else {
+            continue;
+        };
+
+        let task_id = child_task.task_id.unwrap_or_default();
+
+        if child_task.root_task_id != integration_event.root_task_id {
+            return Err(LoomEventError::MismatchedTaskIntegration {
+                task_id,
+                integration_event_id: integration_event.event_id,
+                field: "root_task_id",
+            });
+        }
+
+        if child_task.correlation_id != integration_event.correlation_id {
+            return Err(LoomEventError::MismatchedTaskIntegration {
+                task_id,
+                integration_event_id: integration_event.event_id,
+                field: "correlation_id",
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_memory_evidence(
@@ -653,6 +698,11 @@ pub enum LoomEventError {
     MissingTaskIntegration {
         task_id: u64,
     },
+    MismatchedTaskIntegration {
+        task_id: u64,
+        integration_event_id: u64,
+        field: &'static str,
+    },
     Io {
         path: String,
         source: String,
@@ -727,6 +777,14 @@ impl std::fmt::Display for LoomEventError {
             Self::MissingTaskIntegration { task_id } => {
                 write!(f, "child task {task_id} is missing integration path")
             }
+            Self::MismatchedTaskIntegration {
+                task_id,
+                integration_event_id,
+                field,
+            } => write!(
+                f,
+                "child task {task_id} references integration event {integration_event_id} with mismatched {field}"
+            ),
             Self::Io { path, source } => write!(f, "loom event log I/O failed at {path}: {source}"),
             Self::Json { line, source } => match line {
                 Some(line) => write!(f, "loom event JSONL parse failed at line {line}: {source}"),

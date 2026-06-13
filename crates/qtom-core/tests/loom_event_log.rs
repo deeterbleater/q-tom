@@ -701,6 +701,48 @@ fn replay_validation_rejects_child_task_without_integration_path() {
 }
 
 #[test]
+fn replay_validation_rejects_child_task_with_integration_path_from_different_root() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        child_task(event(LoomEventType::TaskCreated, 2, 11), 10),
+        with_root_task(event(LoomEventType::IntegrationRequested, 3, 10), 2),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("integration path should match child task root context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedTaskIntegration {
+            task_id: 11,
+            integration_event_id: 3,
+            field: "root_task_id",
+        }
+    );
+}
+
+#[test]
+fn replay_validation_rejects_child_task_with_integration_path_from_different_correlation() {
+    let events = vec![
+        event(LoomEventType::TaskCreated, 1, 10),
+        child_task(event(LoomEventType::TaskCreated, 2, 11), 10),
+        with_correlation(event(LoomEventType::IntegrationRequested, 3, 10), 100),
+    ];
+
+    let err = validate_events(&events)
+        .expect_err("integration path should match child task correlation context");
+
+    assert_eq!(
+        err,
+        LoomEventError::MismatchedTaskIntegration {
+            task_id: 11,
+            integration_event_id: 3,
+            field: "correlation_id",
+        }
+    );
+}
+
+#[test]
 fn replay_validation_accepts_child_task_with_integration_path() {
     let events = vec![
         event(LoomEventType::TaskCreated, 1, 10),
