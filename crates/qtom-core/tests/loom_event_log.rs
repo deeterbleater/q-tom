@@ -254,6 +254,41 @@ fn replay_validation_reports_event_counts() {
 }
 
 #[test]
+fn replay_validation_reports_lifecycle_counts() {
+    let mut log = InMemoryEventLog::new();
+
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+    log.append(event(LoomEventType::RouteDecisionRecorded, 2, 10))
+        .expect("route_decision_recorded should append");
+    log.append(caused_by(event(LoomEventType::TaskAssigned, 3, 10), 2))
+        .expect("task_assigned should append");
+    log.append(event(LoomEventType::TaskCompleted, 4, 10))
+        .expect("task_completed should append");
+
+    let mut decommissioned = event(LoomEventType::AgentDecommissioned, 5, 10);
+    decommissioned.agent_id = Some(42);
+    log.append(decommissioned)
+        .expect("agent_decommissioned should append");
+
+    log.append(event(LoomEventType::MemoryNodeCreated, 6, 10))
+        .expect("memory_node_created should append");
+    log.append(event(LoomEventType::TopologyProposed, 7, 0))
+        .expect("topology_proposed should append");
+    log.append(caused_by(event(LoomEventType::TopologyCommitted, 8, 0), 7))
+        .expect("topology_committed should append");
+
+    let report = log.validate_replay().expect("replay should validate");
+
+    assert_eq!(report.route_decision_count, 1);
+    assert_eq!(report.assignment_count, 1);
+    assert_eq!(report.completion_count, 1);
+    assert_eq!(report.decommission_count, 1);
+    assert_eq!(report.memory_node_count, 1);
+    assert_eq!(report.topology_commit_count, 1);
+}
+
+#[test]
 fn replay_validation_rejects_duplicate_ids_in_slice() {
     let events = vec![
         event(LoomEventType::TaskCreated, 1, 10),

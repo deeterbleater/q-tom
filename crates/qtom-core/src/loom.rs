@@ -205,6 +205,12 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut replay_log = InMemoryEventLog::new();
     let mut root_task_ids = HashSet::new();
     let mut task_event_count = 0;
+    let mut route_decision_count = 0;
+    let mut assignment_count = 0;
+    let mut completion_count = 0;
+    let mut decommission_count = 0;
+    let mut memory_node_count = 0;
+    let mut topology_commit_count = 0;
 
     for event in events {
         replay_log.append(event.clone())?;
@@ -213,12 +219,28 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         if event.task_id.is_some() {
             task_event_count += 1;
         }
+
+        match event.event_type {
+            LoomEventType::RouteDecisionRecorded => route_decision_count += 1,
+            LoomEventType::TaskAssigned => assignment_count += 1,
+            LoomEventType::TaskCompleted => completion_count += 1,
+            LoomEventType::AgentDecommissioned => decommission_count += 1,
+            LoomEventType::MemoryNodeCreated => memory_node_count += 1,
+            LoomEventType::TopologyCommitted => topology_commit_count += 1,
+            _ => {}
+        }
     }
 
     Ok(ReplayValidationReport {
         event_count: events.len(),
         root_task_count: root_task_ids.len(),
         task_event_count,
+        route_decision_count,
+        assignment_count,
+        completion_count,
+        decommission_count,
+        memory_node_count,
+        topology_commit_count,
     })
 }
 
@@ -227,6 +249,12 @@ pub struct ReplayValidationReport {
     pub event_count: usize,
     pub root_task_count: usize,
     pub task_event_count: usize,
+    pub route_decision_count: usize,
+    pub assignment_count: usize,
+    pub completion_count: usize,
+    pub decommission_count: usize,
+    pub memory_node_count: usize,
+    pub topology_commit_count: usize,
 }
 
 fn required_cause(event_type: LoomEventType) -> Option<LoomEventType> {
