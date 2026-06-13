@@ -192,3 +192,46 @@ fn lifecycle_flows_cover_main_system_paths() {
         );
     }
 }
+
+#[test]
+fn topology_governance_covers_change_controls() {
+    let governance_path = repo_root().join("docs/topology-governance.md");
+    let governance = fs::read_to_string(&governance_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", governance_path.display()));
+    let governance = governance.to_lowercase();
+
+    let required_changes = [
+        "new axes",
+        "split axes",
+        "deprecated axes",
+        "new agent profiles",
+        "benchmark schema changes",
+        "memory index versions",
+        "route policy changes",
+    ];
+
+    for change in required_changes {
+        assert!(
+            governance.contains(change),
+            "topology governance should cover `{change}`"
+        );
+    }
+
+    let required_controls = [
+        "proposed",
+        "tested",
+        "approved",
+        "committed",
+        "rolled back",
+        "shadow routing",
+        "canary",
+        "version",
+    ];
+
+    for control in required_controls {
+        assert!(
+            governance.contains(control),
+            "topology governance should document `{control}` control"
+        );
+    }
+}
