@@ -1,5 +1,5 @@
 use crate::types::DEFAULT_DIM;
-use crate::{LoomModelError, RoutingRequest, TaskEnvelope};
+use crate::{AgentLabels, AgentProfile, LoomModelError, RoutingRequest, TaskEnvelope};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TaskRouteRequestConfig {
@@ -54,6 +54,24 @@ pub fn build_route_request_from_task(
         fallback_generalist_id: config.fallback_generalist_id,
         radius_max_threshold: config.radius_max_threshold,
     })
+}
+
+pub fn simulated_agents_for_requests(
+    requests: &[RoutingRequest],
+    first_agent_id: u32,
+) -> Vec<AgentProfile> {
+    requests
+        .iter()
+        .enumerate()
+        .map(|(index, request)| AgentProfile {
+            id: first_agent_id + index as u32,
+            vector: request.vector.clone(),
+            labels: AgentLabels {
+                memory_profile: (request.task_id % u16::MAX as u64) as u16,
+                ..AgentLabels::default()
+            },
+        })
+        .collect()
 }
 
 fn stable_text_hash(text: &str) -> u64 {

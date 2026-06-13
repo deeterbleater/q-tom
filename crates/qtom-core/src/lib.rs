@@ -36,7 +36,9 @@ pub use loom_model::{
     IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
     PlanNode, TaskEnvelope,
 };
-pub use loom_route::{TaskRouteRequestConfig, build_route_request_from_task};
+pub use loom_route::{
+    TaskRouteRequestConfig, build_route_request_from_task, simulated_agents_for_requests,
+};
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
 pub use score::{ScoreCoefficients, score_agent};
