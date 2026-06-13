@@ -1,6 +1,7 @@
 use crate::types::DEFAULT_DIM;
 use crate::{
-    AgentLabels, AgentProfile, LoomModelError, RoutingRequest, RoutingResult, TaskEnvelope,
+    AgentLabels, AgentProfile, LoomEvent, LoomEventType, LoomModelError, RoutingRequest,
+    RoutingResult, TaskEnvelope,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,6 +134,38 @@ impl RouteDecision {
             substitute_distance_delta,
             used_fallback: result.used_fallback,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskRouteDecisionEventConfig {
+    pub event_id: u64,
+    pub root_task_id: u64,
+    pub prompt_id: u64,
+    pub topology_snapshot_id: u64,
+    pub occurred_at_ms: u64,
+    pub correlation_id: u64,
+}
+
+pub fn route_decision_recorded_event(
+    decision: &RouteDecision,
+    config: TaskRouteDecisionEventConfig,
+) -> LoomEvent {
+    LoomEvent {
+        event_id: config.event_id,
+        event_type: LoomEventType::RouteDecisionRecorded,
+        root_task_id: config.root_task_id,
+        task_id: Some(decision.task_id),
+        parent_task_id: None,
+        prompt_id: Some(config.prompt_id),
+        agent_id: None,
+        agent_role: None,
+        topology_snapshot_id: Some(config.topology_snapshot_id),
+        payload_schema: "qtom.route_decision.v1".to_string(),
+        payload_ref: format!("inline://route-decision/{}", decision.route_decision_id),
+        occurred_at_ms: config.occurred_at_ms,
+        causation_id: None,
+        correlation_id: config.correlation_id,
     }
 }
 
