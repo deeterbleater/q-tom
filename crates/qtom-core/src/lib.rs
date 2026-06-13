@@ -6,6 +6,7 @@ pub mod golden;
 pub mod loom;
 pub mod loom_mock;
 pub mod loom_model;
+pub mod loom_route;
 pub mod metrics;
 pub mod route_table;
 pub mod score;
@@ -35,6 +36,7 @@ pub use loom_model::{
     IntegrationReport, IntegrationStatus, JoinPolicy, LoomModelError, MemoryNode, MemoryNodeKind,
     PlanNode, TaskEnvelope,
 };
+pub use loom_route::{TaskRouteRequestConfig, build_route_request_from_task};
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
 pub use score::{ScoreCoefficients, score_agent};

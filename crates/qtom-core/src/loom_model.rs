@@ -355,6 +355,10 @@ pub enum LoomModelError {
     EmptyField(&'static str),
     EmptyCollection(&'static str),
     MissingTaskArtifact(u64),
+    InvalidNumericField {
+        field: &'static str,
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for LoomModelError {
@@ -364,6 +368,9 @@ impl std::fmt::Display for LoomModelError {
             Self::EmptyCollection(field) => write!(f, "`{field}` must not be empty"),
             Self::MissingTaskArtifact(task_id) => {
                 write!(f, "`completed_child_artifacts` is missing task {task_id}")
+            }
+            Self::InvalidNumericField { field, reason } => {
+                write!(f, "`{field}` {reason}")
             }
         }
     }
