@@ -76,3 +76,45 @@ fn system_boundaries_cover_architecture_layers() {
         );
     }
 }
+
+#[test]
+fn core_entities_cover_required_model() {
+    let entities_path = repo_root().join("docs/core-entities.md");
+    let entities = fs::read_to_string(&entities_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", entities_path.display()));
+    let entities = entities.to_lowercase();
+
+    let required_entities = [
+        "prompt",
+        "taskenvelope",
+        "plannode",
+        "agentprofile",
+        "routerequest",
+        "routedecision",
+        "artifactref",
+        "signalref",
+        "integrationgroup",
+        "integrationreport",
+        "agentdecommissionpacket",
+        "memorynode",
+        "gradientspace",
+        "topologyproposal",
+        "topologysnapshot",
+    ];
+
+    for entity in required_entities {
+        assert!(
+            entities.contains(entity),
+            "core entities should define `{entity}`"
+        );
+    }
+
+    let required_model_terms = ["owner", "lifecycle", "storage", "lineage"];
+
+    for term in required_model_terms {
+        assert!(
+            entities.contains(term),
+            "core entities should document `{term}` expectations"
+        );
+    }
+}
