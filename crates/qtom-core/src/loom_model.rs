@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskEnvelope {
     pub task_id: u64,
@@ -567,6 +569,79 @@ impl GradientSpace {
             placement_evidence_ref,
         })
     }
+
+    pub fn memory_candidates(
+        &self,
+        placements: &[MemoryPlacement],
+        query_coordinates: Vec<f32>,
+        radius_sq: f32,
+        budget: usize,
+    ) -> Result<Vec<MemoryCandidate>, LoomModelError> {
+        if query_coordinates.len() != self.axes.len() {
+            return Err(LoomModelError::InvalidNumericField {
+                field: "query_coordinates",
+                reason: "must match gradient axis count",
+            });
+        }
+
+        if radius_sq < 0.0 {
+            return Err(LoomModelError::InvalidNumericField {
+                field: "radius_sq",
+                reason: "must be non-negative",
+            });
+        }
+
+        if budget == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut candidates = Vec::new();
+        for placement in placements {
+            if placement.gradient_space_id != self.gradient_space_id
+                || placement.gradient_space_version != self.version
+            {
+                continue;
+            }
+
+            if placement.coordinates.len() != self.axes.len() {
+                return Err(LoomModelError::InvalidNumericField {
+                    field: "placement.coordinates",
+                    reason: "must match gradient axis count",
+                });
+            }
+
+            let distance_sq = placement
+                .coordinates
+                .iter()
+                .zip(query_coordinates.iter())
+                .map(|(placement_coordinate, query_coordinate)| {
+                    let delta = placement_coordinate - query_coordinate;
+                    delta * delta
+                })
+                .sum::<f32>();
+
+            if distance_sq <= radius_sq {
+                candidates.push(MemoryCandidate {
+                    memory_node_id: placement.memory_node_id,
+                    placement_id: placement.placement_id,
+                    gradient_space_id: placement.gradient_space_id,
+                    gradient_space_version: placement.gradient_space_version,
+                    distance_sq,
+                });
+            }
+        }
+
+        candidates.sort_by(|left, right| {
+            left.distance_sq
+                .partial_cmp(&right.distance_sq)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.memory_node_id.cmp(&right.memory_node_id))
+                .then_with(|| left.placement_id.cmp(&right.placement_id))
+        });
+        candidates.truncate(budget);
+
+        Ok(candidates)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -577,6 +652,15 @@ pub struct MemoryPlacement {
     pub gradient_space_version: u64,
     pub coordinates: Vec<f32>,
     pub placement_evidence_ref: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemoryCandidate {
+    pub memory_node_id: u64,
+    pub placement_id: u64,
+    pub gradient_space_id: u64,
+    pub gradient_space_version: u64,
+    pub distance_sq: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

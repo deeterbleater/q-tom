@@ -1,7 +1,7 @@
 use qtom_core::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
     GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
-    LoomModelError, MemoryNode, MemoryNodeKind, PlanNode, TaskEnvelope,
+    LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
 };
 
 #[test]
@@ -338,4 +338,121 @@ fn memory_placement_rejects_coordinate_axis_mismatch() {
             reason: "must match gradient axis count",
         }
     );
+}
+
+#[test]
+fn gradient_space_produces_radius_limited_memory_candidates() {
+    let space = two_axis_space();
+    let placements = vec![
+        placement(9_000, 1_500, 44, 3, vec![0.20, 0.20]),
+        placement(9_001, 1_501, 44, 3, vec![0.50, 0.50]),
+        placement(9_002, 1_502, 44, 3, vec![0.90, 0.90]),
+    ];
+
+    let candidates = space
+        .memory_candidates(&placements, vec![0.0, 0.0], 1.0, 2)
+        .expect("candidate selection should succeed");
+
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.memory_node_id)
+            .collect::<Vec<_>>(),
+        vec![1_500, 1_501]
+    );
+    assert!(candidates[0].distance_sq < candidates[1].distance_sq);
+    assert_eq!(candidates[0].gradient_space_version, 3);
+}
+
+#[test]
+fn memory_candidates_ignore_other_gradient_space_versions() {
+    let space = two_axis_space();
+    let placements = vec![
+        placement(9_000, 1_500, 44, 2, vec![0.01, 0.01]),
+        placement(9_001, 1_501, 44, 3, vec![0.50, 0.50]),
+        placement(9_002, 1_502, 45, 3, vec![0.01, 0.01]),
+    ];
+
+    let candidates = space
+        .memory_candidates(&placements, vec![0.0, 0.0], 1.0, 8)
+        .expect("candidate selection should succeed");
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].memory_node_id, 1_501);
+}
+
+#[test]
+fn memory_candidates_reject_query_axis_mismatch() {
+    let space = two_axis_space();
+    let err = space
+        .memory_candidates(&[], vec![0.25], 1.0, 8)
+        .expect_err("query coordinates should match axis count");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidNumericField {
+            field: "query_coordinates",
+            reason: "must match gradient axis count",
+        }
+    );
+}
+
+#[test]
+fn memory_candidates_reject_negative_radius() {
+    let space = two_axis_space();
+    let err = space
+        .memory_candidates(&[], vec![0.25, 0.25], -1.0, 8)
+        .expect_err("radius should be non-negative");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidNumericField {
+            field: "radius_sq",
+            reason: "must be non-negative",
+        }
+    );
+}
+
+#[test]
+fn memory_candidates_allow_zero_budget() {
+    let space = two_axis_space();
+    let placements = vec![placement(9_000, 1_500, 44, 3, vec![0.01, 0.01])];
+
+    let candidates = space
+        .memory_candidates(&placements, vec![0.0, 0.0], 1.0, 0)
+        .expect("zero budget should be a valid empty candidate request");
+
+    assert!(candidates.is_empty());
+}
+
+fn two_axis_space() -> GradientSpace {
+    GradientSpace::new(
+        44,
+        "mock-memory",
+        3,
+        vec![
+            GradientAxis::new(1, "domain", "general", "specialized", 0.9)
+                .expect("axis should be valid"),
+            GradientAxis::new(2, "tool-affinity", "low", "high", 0.8)
+                .expect("axis should be valid"),
+        ],
+    )
+    .expect("space should be valid")
+}
+
+fn placement(
+    placement_id: u64,
+    memory_node_id: u64,
+    gradient_space_id: u64,
+    gradient_space_version: u64,
+    coordinates: Vec<f32>,
+) -> MemoryPlacement {
+    MemoryPlacement {
+        placement_id,
+        memory_node_id,
+        gradient_space_id,
+        gradient_space_version,
+        coordinates,
+        placement_evidence_ref: format!("inline://placement/evidence/{placement_id}"),
+    }
 }
