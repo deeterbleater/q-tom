@@ -17,6 +17,7 @@ This document keeps the current benchmark numbers in one place. Treat these as d
 cargo run -p qtom-bench --release
 cargo run -p qtom-bench --release -- --prod-profile
 cargo run -p qtom-bench --release -- --batch-profile
+cargo run -p qtom-bench --release -- --candidate-prefilter-profile
 cargo run -p qtom-bench --release --features qtom-cuda/cuda-runtime -- --cuda-timing work/golden/8192x2048d16k1.fixture
 cargo run -p qtom-bench --release --features qtom-cuda/cuda-runtime -- --cuda-scale
 ```
@@ -143,6 +144,41 @@ agents  candidates  cpu_parallel_avg_ms  cuda_reuse_avg_ms  cuda_device_ms  spee
 
 This curve says exact CUDA scoring is useful, but still roughly linear in candidate count. The strongest architecture lever is not only making the full scan more clever; it is handing CUDA a compact, curated candidate set and then using CUDA for exact parity-preserving scoring.
 
+## Candidate Prefilter Probe
+
+`--candidate-prefilter-profile` is a CPU-only benchmark for lossy candidate generation. It compares deterministic coarse-grid projections, trims to a final candidate budget by projected distance, then runs the normal exact score function only over that subset. The exact full CPU router remains the recall oracle.
+
+Current strategies:
+
+```text
+2d-single   dims [0,1]
+3d-single   dims [0,1,2]
+2d-stacked  union of dims [0,1], [2,3], [4,5], [6,7]
+3d-stacked  union of dims [0,1,2], [3,4,5], [6,7,8]
+```
+
+Representative run:
+
+```text
+strategy    agents  tasks  budget  scan_reduction  top1_recall  ideal_flag_match  total_ms
+2d-single   8192    512    128     0.984           0.3535       0.9668            5.109
+3d-single   8192    512    128     0.984           0.5469       0.9746            8.776
+2d-stacked  8192    512    128     0.984           0.8418       0.9941            219.175
+3d-stacked  8192    512    128     0.984           0.9336       1.0000            168.246
+2d-single   65536   256    1024    0.984           0.4961       0.9805            29.265
+3d-single   65536   256    1024    0.984           0.6836       0.9844            51.541
+2d-stacked  65536   256    1024    0.984           0.9336       1.0000            1307.716
+3d-stacked  65536   256    1024    0.984           1.0000       1.0000            1014.820
+2d-single   262144  64     1024    0.996           0.1250       0.9844            30.919
+3d-single   262144  64     1024    0.996           0.2500       0.9531            28.656
+2d-stacked  262144  64     1024    0.996           0.6250       1.0000            591.388
+3d-stacked  262144  64     1024    0.996           0.6719       0.9844            379.647
+```
+
+The quality result is positive: adding a third dimension improves recall, and stacking independent projections improves recall substantially. At `65536` agents and a `1024` candidate budget, `2d-single` recalls `49.61%`, `3d-single` recalls `68.36%`, `2d-stacked` recalls `93.36%`, and `3d-stacked` recalls `100%`.
+
+The performance result is negative for this naive implementation: stacked projection expansion and union trimming cost too much as written. This is still useful because it separates candidate quality from prefilter mechanics. Memory-node curation should keep the stacked/multi-view idea, but use a cheaper retrieval structure than naive grid expansion, such as precomputed per-layer neighbor lists, inverted semantic keys, approximate-nearest structures, or curator-maintained shortlist tables.
+
 ## Memory-Curation Interpretation
 
 For conversational memory, treat raw logs as canonical and memory nodes as indexed candidates:
@@ -164,11 +200,7 @@ runtime/module setup
 -> launch-vs-device ambiguity
 -> device-side kernel body
 -> repeated full-agent/full-memory candidate scan
+-> lossy candidate generation quality
 ```
 
-The next useful benchmark should measure either:
-
-- candidate-set quality and recall for a memory-node prefilter, or
-- shared-memory tiling in the exact `k = 1` CUDA scorer.
-
-Either path should keep exact CPU/CUDA parity as the final correctness gate.
+The next useful benchmark should measure shared-memory tiling or another exact-kernel improvement while keeping the candidate generator result in view: compact candidate sets are valuable, but they must come from a higher-recall memory curation layer than the toy 2D grid.

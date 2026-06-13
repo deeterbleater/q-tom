@@ -1,8 +1,9 @@
 use qtom_core::{
-    AgentRouteTable, BackendParityTolerance, BatchMetrics, CpuRouter, FixtureConfig, ProjectConfig,
-    RouterBackend, ScoreCoefficients, assert_backend_parity, assert_backend_parity_with_tolerance,
-    batch_metrics, generate_fixture, read_golden_fixture, routing_results_checksum,
-    score::{dist_sq, dist_sq_blocked},
+    AgentProfile, AgentRouteTable, BackendParityTolerance, BatchMetrics, CpuRouter, Fixture,
+    FixtureConfig, ProjectConfig, RouterBackend, RoutingRequest, ScoreCoefficients,
+    assert_backend_parity, assert_backend_parity_with_tolerance, batch_metrics, generate_fixture,
+    read_golden_fixture, routing_results_checksum,
+    score::{dist_sq, dist_sq_blocked, score_components_for_vector},
     write_golden_fixture,
 };
 use qtom_cuda::{CudaRouteK1Executor, CudaRouter, CudaRuntime};
@@ -20,6 +21,16 @@ const PROD_TOP_K_VALUES: [usize; 2] = [1, 8];
 const CUDA_SCALE_AGENT_COUNTS: [usize; 7] = [512, 1024, 2048, 4096, 8192, 16384, 32768];
 const CUDA_SCALE_TASK_COUNT: usize = 2048;
 const CUDA_SCALE_DIMENSIONS: usize = 16;
+const PREFILTER_AGENT_COUNTS: [usize; 3] = [8192, 65536, 262144];
+const PREFILTER_CANDIDATE_BUDGETS: [usize; 6] = [32, 64, 128, 256, 512, 1024];
+const PREFILTER_GRID_BINS: usize = 32;
+const PREFILTER_2D_A: [usize; 2] = [0, 1];
+const PREFILTER_2D_B: [usize; 2] = [2, 3];
+const PREFILTER_2D_C: [usize; 2] = [4, 5];
+const PREFILTER_2D_D: [usize; 2] = [6, 7];
+const PREFILTER_3D_A: [usize; 3] = [0, 1, 2];
+const PREFILTER_3D_B: [usize; 3] = [3, 4, 5];
+const PREFILTER_3D_C: [usize; 3] = [6, 7, 8];
 const CUDA_PARITY_SCORE_ABS_EPSILON: f32 = 1.0e-5;
 const CUDA_TIMING_ITERATIONS: usize = 5;
 
@@ -46,6 +57,7 @@ fn main() {
         BenchMode::BatchProfile => run_batch_profile_matrix(),
         BenchMode::ProdProfile => run_prod_profile_matrix(),
         BenchMode::LayoutProfile => run_layout_profile_matrix(),
+        BenchMode::CandidatePrefilterProfile => run_candidate_prefilter_profile(),
         BenchMode::WriteGolden { path } => run_write_golden(path),
         BenchMode::WriteCudaGolden { path } => run_write_cuda_golden(path),
         BenchMode::GoldenParity { path } => run_golden_parity(path),
@@ -683,6 +695,448 @@ fn run_prod_profile_matrix() {
     }
 }
 
+fn run_candidate_prefilter_profile() {
+    println!(
+        "candidate_prefilter_columns,strategy,layers,agents,tasks,dims,bins,budget,avg_candidates,scan_reduction,top1_recall,ideal_unavailable_match,prefilter_ms,exact_subset_ms,total_ms"
+    );
+
+    let strategies = [
+        PrefilterStrategy {
+            name: "2d-single",
+            projections: &[&PREFILTER_2D_A],
+        },
+        PrefilterStrategy {
+            name: "3d-single",
+            projections: &[&PREFILTER_3D_A],
+        },
+        PrefilterStrategy {
+            name: "2d-stacked",
+            projections: &[
+                &PREFILTER_2D_A,
+                &PREFILTER_2D_B,
+                &PREFILTER_2D_C,
+                &PREFILTER_2D_D,
+            ],
+        },
+        PrefilterStrategy {
+            name: "3d-stacked",
+            projections: &[&PREFILTER_3D_A, &PREFILTER_3D_B, &PREFILTER_3D_C],
+        },
+    ];
+
+    for agent_count in PREFILTER_AGENT_COUNTS {
+        let config = FixtureConfig {
+            agent_count,
+            task_count: profile_task_count_for(agent_count),
+            dimensions: 16,
+            k: 1,
+            seed: scenario_seed(agent_count, 1),
+        };
+        let fixture = generate_fixture(config);
+        let exact_router = CpuRouter::new(fixture.agents.clone(), ScoreCoefficients::default())
+            .with_debug_observed(false);
+        let exact_results = exact_router
+            .route_batch_with_workers(
+                &fixture.requests,
+                &fixture.states,
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )
+            .expect("exact CPU route should succeed");
+        let expected_agent_ids = exact_results
+            .iter()
+            .map(first_candidate_id)
+            .collect::<Vec<_>>();
+        let expected_ideal_flags = exact_results
+            .iter()
+            .map(|result| result.ideal_candidate_unavailable)
+            .collect::<Vec<_>>();
+
+        for strategy in strategies {
+            let index_start = Instant::now();
+            let index = LayeredGridIndex::new(&fixture.agents, PREFILTER_GRID_BINS, strategy);
+            let index_ms = index_start.elapsed().as_secs_f64() * 1000.0;
+
+            for budget in PREFILTER_CANDIDATE_BUDGETS {
+                let report = profile_prefilter_budget(
+                    &fixture,
+                    &index,
+                    &expected_agent_ids,
+                    &expected_ideal_flags,
+                    budget,
+                );
+                println!(
+                    "candidate_prefilter,strategy={},layers={},agents={},tasks={},dims={},bins={},budget={},avg_candidates={:.1},scan_reduction={:.3},top1_recall={:.4},ideal_unavailable_match={:.4},prefilter_ms={:.3},exact_subset_ms={:.3},total_ms={:.3}",
+                    strategy.name,
+                    strategy.projections.len(),
+                    config.agent_count,
+                    config.task_count,
+                    config.dimensions,
+                    PREFILTER_GRID_BINS,
+                    budget,
+                    report.avg_candidates,
+                    report.scan_reduction,
+                    report.top1_recall,
+                    report.ideal_unavailable_match,
+                    index_ms + report.prefilter_ms,
+                    report.exact_subset_ms,
+                    index_ms + report.prefilter_ms + report.exact_subset_ms
+                );
+            }
+        }
+    }
+}
+
+fn first_candidate_id(result: &qtom_core::RoutingResult) -> u32 {
+    result
+        .available_candidates
+        .first()
+        .map(|candidate| candidate.agent_id)
+        .unwrap_or(u32::MAX)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PrefilterStrategy {
+    name: &'static str,
+    projections: &'static [&'static [usize]],
+}
+
+#[derive(Clone, Debug)]
+struct LayeredGridIndex {
+    layers: Vec<ProjectionGridIndex>,
+    agent_count: usize,
+}
+
+impl LayeredGridIndex {
+    fn new(agents: &[AgentProfile], bins: usize, strategy: PrefilterStrategy) -> Self {
+        let layers = strategy
+            .projections
+            .iter()
+            .map(|projection| ProjectionGridIndex::new(agents, bins, projection))
+            .collect::<Vec<_>>();
+
+        Self {
+            layers,
+            agent_count: agents.len(),
+        }
+    }
+
+    fn candidate_indices(&self, request: &RoutingRequest, budget: usize, out: &mut Vec<usize>) {
+        out.clear();
+        if budget == 0 || self.agent_count == 0 {
+            return;
+        }
+
+        let mut seen = vec![false; self.agent_count];
+        let mut layer_candidates = Vec::new();
+        for layer in &self.layers {
+            layer.candidate_indices(request, budget, &mut layer_candidates);
+            for &agent_index in &layer_candidates {
+                if !seen[agent_index] {
+                    seen[agent_index] = true;
+                    out.push(agent_index);
+                }
+            }
+        }
+
+        if out.len() > budget {
+            let compare = |left: &usize, right: &usize| {
+                let left_dist = self.projection_distance(request, *left);
+                let right_dist = self.projection_distance(request, *right);
+                left_dist
+                    .total_cmp(&right_dist)
+                    .then_with(|| left.cmp(right))
+            };
+            out.select_nth_unstable_by(budget, compare);
+            out.truncate(budget);
+            out.sort_by(compare);
+        }
+    }
+
+    fn projection_distance(&self, request: &RoutingRequest, agent_index: usize) -> f32 {
+        self.layers
+            .iter()
+            .map(|layer| layer.projection_distance(request, agent_index))
+            .sum()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ProjectionGridIndex {
+    bins: usize,
+    dims: Vec<usize>,
+    cells: Vec<Vec<usize>>,
+    projected_vectors: Vec<Vec<f32>>,
+}
+
+impl ProjectionGridIndex {
+    fn new(agents: &[AgentProfile], bins: usize, dims: &[usize]) -> Self {
+        assert!(bins > 0, "coarse grid must have at least one bin");
+        assert!(
+            !dims.is_empty(),
+            "projection must include at least one dimension"
+        );
+        let cell_count = (0..dims.len()).fold(1usize, |acc, _| {
+            acc.checked_mul(bins)
+                .expect("projection grid cell count should fit usize")
+        });
+        let mut cells = vec![Vec::new(); cell_count];
+        let mut projected_vectors = Vec::with_capacity(agents.len());
+        for (agent_index, agent) in agents.iter().enumerate() {
+            let projection = Self::project_vector(&agent.vector, dims);
+            let cell = Self::cell_for_projection(&projection, bins);
+            projected_vectors.push(projection);
+            cells[cell].push(agent_index);
+        }
+
+        Self {
+            bins,
+            dims: dims.to_vec(),
+            cells,
+            projected_vectors,
+        }
+    }
+
+    fn candidate_indices(&self, request: &RoutingRequest, budget: usize, out: &mut Vec<usize>) {
+        out.clear();
+        let request_projection = Self::project_vector(&request.vector, &self.dims);
+        let center = request_projection
+            .iter()
+            .map(|value| Self::bin_for_value(*value, self.bins))
+            .collect::<Vec<_>>();
+        let mut seen_cells = vec![false; self.cells.len()];
+
+        for radius in 0..self.bins {
+            self.collect_radius_cells(&center, radius, &mut seen_cells, out);
+
+            if out.len() >= budget {
+                break;
+            }
+        }
+
+        if out.len() > budget {
+            let compare = |left: &usize, right: &usize| {
+                let left_dist =
+                    dist_sq_dynamic(&request_projection, &self.projected_vectors[*left]);
+                let right_dist =
+                    dist_sq_dynamic(&request_projection, &self.projected_vectors[*right]);
+                left_dist
+                    .total_cmp(&right_dist)
+                    .then_with(|| left.cmp(right))
+            };
+            out.select_nth_unstable_by(budget, compare);
+            out.truncate(budget);
+            out.sort_by(compare);
+        }
+    }
+
+    fn projection_distance(&self, request: &RoutingRequest, agent_index: usize) -> f32 {
+        let request_projection = Self::project_vector(&request.vector, &self.dims);
+        dist_sq_dynamic(&request_projection, &self.projected_vectors[agent_index])
+    }
+
+    fn collect_radius_cells(
+        &self,
+        center: &[usize],
+        radius: usize,
+        seen_cells: &mut [bool],
+        out: &mut Vec<usize>,
+    ) {
+        let mut mins = Vec::with_capacity(center.len());
+        let mut maxes = Vec::with_capacity(center.len());
+        for &value in center {
+            mins.push(value.saturating_sub(radius));
+            maxes.push(value.saturating_add(radius).min(self.bins - 1));
+        }
+
+        let mut coords = mins.clone();
+        loop {
+            let on_border = radius == 0
+                || coords
+                    .iter()
+                    .enumerate()
+                    .any(|(dim, coord)| *coord == mins[dim] || *coord == maxes[dim]);
+            if on_border {
+                let cell_index = self.cell_index(&coords);
+                if !seen_cells[cell_index] {
+                    seen_cells[cell_index] = true;
+                    out.extend_from_slice(&self.cells[cell_index]);
+                }
+            }
+
+            if !increment_coords(&mut coords, &mins, &maxes) {
+                break;
+            }
+        }
+    }
+
+    fn project_vector(vector: &[f32], dims: &[usize]) -> Vec<f32> {
+        dims.iter()
+            .map(|dim| vector.get(*dim).copied().unwrap_or(0.0))
+            .collect()
+    }
+
+    fn cell_for_projection(projection: &[f32], bins: usize) -> usize {
+        let mut index = 0usize;
+        let mut stride = 1usize;
+        for value in projection {
+            index += Self::bin_for_value(*value, bins) * stride;
+            stride *= bins;
+        }
+        index
+    }
+
+    fn cell_index(&self, coords: &[usize]) -> usize {
+        let mut index = 0usize;
+        let mut stride = 1usize;
+        for coord in coords {
+            index += *coord * stride;
+            stride *= self.bins;
+        }
+        index
+    }
+
+    fn bin_for_value(value: f32, bins: usize) -> usize {
+        let scaled = (value.clamp(0.0, 1.0) * bins as f32).floor() as usize;
+        scaled.min(bins - 1)
+    }
+}
+
+fn increment_coords(coords: &mut [usize], mins: &[usize], maxes: &[usize]) -> bool {
+    for dim in 0..coords.len() {
+        if coords[dim] < maxes[dim] {
+            coords[dim] += 1;
+            coords[..dim].copy_from_slice(&mins[..dim]);
+            return true;
+        }
+    }
+    false
+}
+
+fn dist_sq_dynamic(left: &[f32], right: &[f32]) -> f32 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| {
+            let diff = left - right;
+            diff * diff
+        })
+        .sum()
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PrefilterReport {
+    avg_candidates: f64,
+    scan_reduction: f64,
+    top1_recall: f64,
+    ideal_unavailable_match: f64,
+    prefilter_ms: f64,
+    exact_subset_ms: f64,
+}
+
+fn profile_prefilter_budget(
+    fixture: &Fixture,
+    index: &LayeredGridIndex,
+    expected_agent_ids: &[u32],
+    expected_ideal_flags: &[bool],
+    budget: usize,
+) -> PrefilterReport {
+    let coefficients = ScoreCoefficients::default();
+    let mut candidates = Vec::new();
+    let mut total_candidates = 0usize;
+    let mut top1_matches = 0usize;
+    let mut ideal_matches = 0usize;
+    let mut prefilter_elapsed = Duration::ZERO;
+    let mut exact_subset_elapsed = Duration::ZERO;
+
+    for (task_index, request) in fixture.requests.iter().enumerate() {
+        let prefilter_start = Instant::now();
+        index.candidate_indices(request, budget, &mut candidates);
+        prefilter_elapsed += prefilter_start.elapsed();
+        total_candidates += candidates.len();
+
+        let exact_start = Instant::now();
+        let mut best_available: Option<PrefilterCandidate> = None;
+        let mut observed_best: Option<PrefilterCandidate> = None;
+        for &agent_index in &candidates {
+            let agent = &fixture.agents[agent_index];
+            let score = score_components_for_vector(
+                &request.vector,
+                &agent.vector,
+                fixture.states[agent_index],
+                coefficients,
+            );
+            let candidate = PrefilterCandidate {
+                agent_id: agent.id,
+                effective_distance: score.effective_distance,
+                base_distance: score.base_distance,
+                available: score.available,
+            };
+
+            if candidate.available
+                && best_available
+                    .as_ref()
+                    .is_none_or(|best| candidate.cmp_available(best).is_lt())
+            {
+                best_available = Some(candidate);
+            }
+            if observed_best
+                .as_ref()
+                .is_none_or(|best| candidate.cmp_observed(best).is_lt())
+            {
+                observed_best = Some(candidate);
+            }
+        }
+        exact_subset_elapsed += exact_start.elapsed();
+
+        if best_available
+            .map(|candidate| candidate.agent_id)
+            .is_some_and(|agent_id| agent_id == expected_agent_ids[task_index])
+        {
+            top1_matches += 1;
+        }
+        if observed_best
+            .map(|candidate| !candidate.available)
+            .is_some_and(|ideal_unavailable| ideal_unavailable == expected_ideal_flags[task_index])
+        {
+            ideal_matches += 1;
+        }
+    }
+
+    let route_count = fixture.requests.len().max(1);
+    let avg_candidates = total_candidates as f64 / route_count as f64;
+    PrefilterReport {
+        avg_candidates,
+        scan_reduction: 1.0 - (avg_candidates / fixture.agents.len().max(1) as f64),
+        top1_recall: top1_matches as f64 / route_count as f64,
+        ideal_unavailable_match: ideal_matches as f64 / route_count as f64,
+        prefilter_ms: prefilter_elapsed.as_secs_f64() * 1000.0,
+        exact_subset_ms: exact_subset_elapsed.as_secs_f64() * 1000.0,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PrefilterCandidate {
+    agent_id: u32,
+    effective_distance: f32,
+    base_distance: f32,
+    available: bool,
+}
+
+impl PrefilterCandidate {
+    fn cmp_available(&self, other: &Self) -> std::cmp::Ordering {
+        self.effective_distance
+            .total_cmp(&other.effective_distance)
+            .then_with(|| self.agent_id.cmp(&other.agent_id))
+    }
+
+    fn cmp_observed(&self, other: &Self) -> std::cmp::Ordering {
+        self.base_distance
+            .total_cmp(&other.base_distance)
+            .then_with(|| self.agent_id.cmp(&other.agent_id))
+    }
+}
+
 fn run_scenario(config: FixtureConfig) {
     let fixture = generate_fixture(config);
     let router = CpuRouter::new(fixture.agents, ScoreCoefficients::default());
@@ -1231,6 +1685,7 @@ enum BenchMode {
     BatchProfile,
     ProdProfile,
     LayoutProfile,
+    CandidatePrefilterProfile,
     WriteGolden { path: std::path::PathBuf },
     WriteCudaGolden { path: std::path::PathBuf },
     GoldenParity { path: std::path::PathBuf },
@@ -1252,6 +1707,7 @@ impl BenchMode {
                 "--batch-profile" => mode = Self::BatchProfile,
                 "--prod-profile" => mode = Self::ProdProfile,
                 "--layout-profile" => mode = Self::LayoutProfile,
+                "--candidate-prefilter-profile" => mode = Self::CandidatePrefilterProfile,
                 "--write-golden" => {
                     let Some(path) = args.next() else {
                         return Self::Invalid("--write-golden requires a path".to_string());
@@ -1303,6 +1759,7 @@ impl BenchMode {
             Self::BatchProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::ProdProfile => &BATCH_PROFILE_AGENT_COUNTS,
             Self::LayoutProfile => &PROFILE_AGENT_COUNTS,
+            Self::CandidatePrefilterProfile => &[],
             Self::WriteGolden { .. }
             | Self::WriteCudaGolden { .. }
             | Self::GoldenParity { .. }
@@ -1322,6 +1779,7 @@ impl BenchMode {
             Self::BatchProfile => "batch-profile",
             Self::ProdProfile => "prod-profile",
             Self::LayoutProfile => "layout-profile",
+            Self::CandidatePrefilterProfile => "candidate-prefilter-profile",
             Self::WriteGolden { .. } => "write-golden",
             Self::WriteCudaGolden { .. } => "write-cuda-golden",
             Self::GoldenParity { .. } => "golden-parity",
@@ -1385,6 +1843,14 @@ mod tests {
         assert_eq!(
             BenchMode::from_args(["--layout-profile".to_string()]),
             BenchMode::LayoutProfile
+        );
+    }
+
+    #[test]
+    fn candidate_prefilter_profile_flag_selects_mode() {
+        assert_eq!(
+            BenchMode::from_args(["--candidate-prefilter-profile".to_string()]),
+            BenchMode::CandidatePrefilterProfile
         );
     }
 

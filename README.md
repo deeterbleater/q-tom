@@ -42,6 +42,7 @@ cargo run -p qtom-bench --release -- --profile
 cargo run -p qtom-bench --release -- --layout-profile
 cargo run -p qtom-bench --release -- --batch-profile
 cargo run -p qtom-bench --release -- --prod-profile
+cargo run -p qtom-bench --release -- --candidate-prefilter-profile
 cargo run -p qtom-bench --release -- --write-golden work/golden/8192x2048d16k8.fixture
 cargo run -p qtom-bench --release -- --golden-parity work/golden/8192x2048d16k8.fixture
 cargo run -p qtom-bench --release -- --cuda-plan work/golden/8192x2048d16k8.fixture
@@ -78,7 +79,9 @@ Use `--cuda-timing` with `--features qtom-cuda/cuda-runtime` to time whole publi
 
 Use `--cuda-scale` with `--features qtom-cuda/cuda-runtime` to generate deterministic `k=1`, `dims=16` fixtures across multiple agent counts while holding task count fixed. This probes how exact CUDA scoring responds to smaller curated candidate sets before broader memory-retrieval or lossy prefilter work.
 
-See `docs/benchmark-ledger.md` for the current CPU p99, CUDA timing, CUDA stage-breakdown, and candidate-set scale numbers.
+Use `--candidate-prefilter-profile` to measure deterministic CPU-only lossy prefilters against exact CPU routing. It compares single 2D, single 3D, stacked 2D, and stacked 3D projection strategies, then reports scan reduction, top-1 recall, ideal-unavailable flag agreement, prefilter time, and exact subset scoring time.
+
+See `docs/benchmark-ledger.md` for the current CPU p99, CUDA timing, CUDA stage-breakdown, candidate-set scale, and prefilter-recall numbers.
 
 Use `cargo test -p qtom-cuda --features cuda-runtime` to opt into CUDA Driver API availability detection and resource-wrapper smoke tests. It verifies that the NVIDIA driver runtime can be loaded, queried, used for tiny stream/device-buffer lifecycles, used to load the route-kernel module, used for typed host/device copies, and used for decoded `k = 1` CPU parity through both the internal helper and public `CudaRouter::route_batch`. See `docs/cuda-toolchain.md`.
 
