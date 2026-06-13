@@ -8,6 +8,7 @@ pub mod loom_mock;
 pub mod loom_model;
 pub mod loom_projection;
 pub mod loom_route;
+pub mod loom_runtime;
 pub mod metrics;
 pub mod route_table;
 pub mod score;
@@ -43,6 +44,10 @@ pub use loom_projection::{memory_lineage_projection, route_trace_projection};
 pub use loom_route::{
     RouteDecision, TaskRouteDecisionEventConfig, TaskRouteRequestConfig,
     build_route_request_from_task, route_decision_recorded_event, simulated_agents_for_requests,
+};
+pub use loom_runtime::{
+    AgentExecutionResult, AgentRuntime, HydratedContext, MockConstructorRuntime,
+    MockConstructorRuntimeConfig,
 };
 pub use metrics::{BatchMetrics, RouteMetrics, batch_metrics, route_metrics};
 pub use route_table::AgentRouteTable;
