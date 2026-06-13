@@ -275,3 +275,57 @@ fn mvp_roadmap_covers_build_phases() {
         );
     }
 }
+
+#[test]
+fn architecture_doc_consolidates_outline() {
+    let architecture_path = repo_root().join("docs/architecture.md");
+    let architecture = fs::read_to_string(&architecture_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", architecture_path.display()));
+    let architecture = architecture.to_lowercase();
+
+    let required_sections = [
+        "executive summary",
+        "problem statement",
+        "goals and non-goals",
+        "design principles",
+        "system context",
+        "layered architecture",
+        "core entity model",
+        "event and storage model",
+        "routing lifecycle",
+        "task loom lifecycle",
+        "memory curation lifecycle",
+        "topology update lifecycle",
+        "replay and determinism",
+        "evaluation and benchmarking",
+        "observability",
+        "security and governance",
+        "scaling strategy",
+        "mvp plan",
+        "risks and open questions",
+    ];
+
+    for section in required_sections {
+        assert!(
+            architecture.contains(section),
+            "architecture doc should include section `{section}`"
+        );
+    }
+
+    let supporting_docs = [
+        "docs/glossary.md",
+        "docs/system-boundaries.md",
+        "docs/core-entities.md",
+        "docs/event-vocabulary.md",
+        "docs/lifecycle-flows.md",
+        "docs/topology-governance.md",
+        "docs/mvp-roadmap.md",
+    ];
+
+    for doc in supporting_docs {
+        assert!(
+            architecture.contains(doc),
+            "architecture doc should link supporting doc `{doc}`"
+        );
+    }
+}
