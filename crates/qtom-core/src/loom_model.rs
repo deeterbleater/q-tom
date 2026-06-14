@@ -1235,6 +1235,137 @@ where
     Ok(())
 }
 
+pub fn write_rollback_records_jsonl<'a, I, P>(
+    path: P,
+    records: I,
+) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a RollbackRecord>,
+    P: AsRef<Path>,
+{
+    let records = records.into_iter().collect::<Vec<_>>();
+    validate_unique_rollback_ids(records.iter().copied())?;
+
+    let file = File::create(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for record in records {
+        serde_json::to_writer(&mut writer, record).map_err(|source| LoomModelError::Json {
+            line: None,
+            source: source.to_string(),
+        })?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| LoomModelError::Io {
+                path: path.as_ref().display().to_string(),
+                source: source.to_string(),
+            })?;
+    }
+
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+pub fn read_rollback_records_jsonl<P>(path: P) -> Result<Vec<RollbackRecord>, LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line.map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let record: RollbackRecord =
+            serde_json::from_str(&line).map_err(|source| LoomModelError::Json {
+                line: Some(line_number),
+                source: source.to_string(),
+            })?;
+        records.push(record);
+    }
+
+    validate_unique_rollback_ids(records.iter())?;
+
+    Ok(records)
+}
+
+pub fn append_rollback_record_jsonl<P>(
+    path: P,
+    record: &RollbackRecord,
+) -> Result<(), LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let mut records = if path.as_ref().exists() {
+        read_rollback_records_jsonl(path.as_ref())?
+    } else {
+        Vec::new()
+    };
+    records.push(record.clone());
+    validate_unique_rollback_ids(records.iter())?;
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_ref())
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    let mut writer = BufWriter::new(file);
+
+    serde_json::to_writer(&mut writer, record).map_err(|source| LoomModelError::Json {
+        line: None,
+        source: source.to_string(),
+    })?;
+    writer
+        .write_all(b"\n")
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+fn validate_unique_rollback_ids<'a, I>(records: I) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a RollbackRecord>,
+{
+    let mut rollback_ids = HashSet::new();
+
+    for record in records {
+        if !rollback_ids.insert(record.rollback_id) {
+            return Err(LoomModelError::DuplicateRollbackId(record.rollback_id));
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluatorConfig {
     pub model: String,
@@ -1458,6 +1589,7 @@ pub enum LoomModelError {
     DuplicateEvaluationId(u64),
     DuplicateTopologyProposalId(u64),
     DuplicateTopologySnapshotId(u64),
+    DuplicateRollbackId(u64),
     InvalidStateTransition {
         from: &'static str,
         to: &'static str,
@@ -1501,6 +1633,9 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicateTopologySnapshotId(topology_snapshot_id) => {
                 write!(f, "duplicate topology snapshot id {topology_snapshot_id}")
+            }
+            Self::DuplicateRollbackId(rollback_id) => {
+                write!(f, "duplicate rollback id {rollback_id}")
             }
             Self::InvalidStateTransition { from, to } => {
                 write!(f, "cannot transition topology proposal from {from} to {to}")

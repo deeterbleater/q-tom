@@ -1,7 +1,8 @@
 use qtom_core::{
-    LoomModelError, TopologyProposal, TopologyProposalKind, TopologySnapshot,
-    TopologySnapshotStatus, append_topology_proposal_jsonl, append_topology_snapshot_jsonl,
-    read_topology_proposals_jsonl, read_topology_snapshots_jsonl, write_topology_proposals_jsonl,
+    LoomModelError, RollbackRecord, TopologyProposal, TopologyProposalKind, TopologySnapshot,
+    TopologySnapshotStatus, append_rollback_record_jsonl, append_topology_proposal_jsonl,
+    append_topology_snapshot_jsonl, read_rollback_records_jsonl, read_topology_proposals_jsonl,
+    read_topology_snapshots_jsonl, write_rollback_records_jsonl, write_topology_proposals_jsonl,
     write_topology_snapshots_jsonl,
 };
 
@@ -36,6 +37,19 @@ fn snapshot(topology_snapshot_id: u64) -> TopologySnapshot {
         status: TopologySnapshotStatus::Active,
         created_at_ms: 60_000 + topology_snapshot_id,
     }
+}
+
+fn rollback(rollback_id: u64) -> RollbackRecord {
+    RollbackRecord::new(
+        rollback_id,
+        9_000 + rollback_id,
+        8_000 + rollback_id,
+        format!("rollback reason {rollback_id}"),
+        format!("monitor://rollback/{rollback_id}"),
+        vec![format!("inline://route-decision/{rollback_id}")],
+        70_000 + rollback_id,
+    )
+    .expect("rollback record should be valid")
 }
 
 #[test]
@@ -129,6 +143,54 @@ fn append_topology_snapshot_rejects_duplicate_snapshot_id() {
     assert_eq!(
         read_topology_snapshots_jsonl(&path).expect("existing snapshot should remain"),
         vec![snapshot(9_000)]
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn rollback_records_round_trip_through_jsonl() {
+    let path = temp_jsonl_path("rollback-roundtrip");
+    let _ = std::fs::remove_file(&path);
+    let records = vec![rollback(10_000), rollback(10_001)];
+
+    write_rollback_records_jsonl(&path, &records).expect("rollback records should write");
+    let read = read_rollback_records_jsonl(&path).expect("rollback records should read");
+
+    assert_eq!(read, records);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn append_rollback_record_preserves_existing_records() {
+    let path = temp_jsonl_path("rollback-append");
+    let _ = std::fs::remove_file(&path);
+
+    append_rollback_record_jsonl(&path, &rollback(10_000)).expect("first append should work");
+    append_rollback_record_jsonl(&path, &rollback(10_001)).expect("second append should work");
+
+    let read = read_rollback_records_jsonl(&path).expect("rollback records should read");
+
+    assert_eq!(read, vec![rollback(10_000), rollback(10_001)]);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn append_rollback_record_rejects_duplicate_rollback_id() {
+    let path = temp_jsonl_path("rollback-duplicate");
+    let _ = std::fs::remove_file(&path);
+
+    append_rollback_record_jsonl(&path, &rollback(10_000)).expect("first append should work");
+
+    let err = append_rollback_record_jsonl(&path, &rollback(10_000))
+        .expect_err("duplicate rollback id should fail");
+
+    assert_eq!(err, LoomModelError::DuplicateRollbackId(10_000));
+    assert_eq!(
+        read_rollback_records_jsonl(&path).expect("existing rollback should remain"),
+        vec![rollback(10_000)]
     );
 
     let _ = std::fs::remove_file(&path);
