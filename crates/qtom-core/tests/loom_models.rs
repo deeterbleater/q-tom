@@ -2,6 +2,7 @@ use qtom_core::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
     GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
     LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
+    TopologyProposal, TopologyProposalKind, TopologyProposalStatus,
 };
 
 #[test]
@@ -468,6 +469,50 @@ fn memory_candidate_report_handles_empty_reduction_denominator() {
     assert_eq!(report.hard_mask_violation_rate(), 0.0);
     assert_eq!(report.scanned_candidate_reduction(), 0.0);
     assert!(!report.target_met);
+}
+
+#[test]
+fn topology_proposal_preserves_governance_evidence() {
+    let proposal = TopologyProposal::draft(
+        8_000,
+        TopologyProposalKind::MemoryIndexVersion,
+        "curator://agent/800",
+        "inline://topology/change-set/8000",
+        vec![
+            "inline://candidate-reduction/report/1".to_string(),
+            "inline://evaluator/fixture/7000".to_string(),
+        ],
+        50_000,
+    )
+    .expect("proposal should be valid");
+
+    assert_eq!(proposal.topology_proposal_id, 8_000);
+    assert_eq!(proposal.proposal_kind, TopologyProposalKind::MemoryIndexVersion);
+    assert_eq!(proposal.proposer_ref, "curator://agent/800");
+    assert_eq!(proposal.change_set_ref, "inline://topology/change-set/8000");
+    assert_eq!(proposal.status, TopologyProposalStatus::Drafted);
+    assert_eq!(proposal.created_at_ms, 50_000);
+    assert_eq!(proposal.updated_at_ms, 50_000);
+    assert_eq!(proposal.evidence_refs.len(), 2);
+    assert!(proposal.benchmark_report_refs.is_empty());
+    assert!(proposal.shadow_report_refs.is_empty());
+    assert!(proposal.canary_report_refs.is_empty());
+    assert!(proposal.approval_refs.is_empty());
+}
+
+#[test]
+fn topology_proposal_requires_evidence_before_governance() {
+    let err = TopologyProposal::draft(
+        8_000,
+        TopologyProposalKind::RoutePolicy,
+        "evaluation://agent/900",
+        "inline://topology/change-set/8000",
+        vec![],
+        50_000,
+    )
+    .expect_err("proposal should carry evidence refs");
+
+    assert_eq!(err, LoomModelError::EmptyCollection("evidence_refs"));
 }
 
 fn two_axis_space() -> GradientSpace {

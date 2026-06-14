@@ -709,6 +709,75 @@ impl MemoryCandidateReport {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TopologyProposalKind {
+    Axis,
+    RoutePolicy,
+    AgentProfile,
+    MemoryIndexVersion,
+    BenchmarkRubric,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TopologyProposalStatus {
+    Drafted,
+    Tested,
+    Shadowed,
+    Canaried,
+    Approved,
+    Committed,
+    Rejected,
+    Superseded,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyProposal {
+    pub topology_proposal_id: u64,
+    pub proposal_kind: TopologyProposalKind,
+    pub proposer_ref: String,
+    pub change_set_ref: String,
+    pub evidence_refs: Vec<String>,
+    pub benchmark_report_refs: Vec<String>,
+    pub shadow_report_refs: Vec<String>,
+    pub canary_report_refs: Vec<String>,
+    pub approval_refs: Vec<String>,
+    pub status: TopologyProposalStatus,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+impl TopologyProposal {
+    pub fn draft(
+        topology_proposal_id: u64,
+        proposal_kind: TopologyProposalKind,
+        proposer_ref: impl Into<String>,
+        change_set_ref: impl Into<String>,
+        evidence_refs: Vec<String>,
+        created_at_ms: u64,
+    ) -> Result<Self, LoomModelError> {
+        let proposer_ref = proposer_ref.into();
+        let change_set_ref = change_set_ref.into();
+        ensure_not_empty("proposer_ref", &proposer_ref)?;
+        ensure_not_empty("change_set_ref", &change_set_ref)?;
+        ensure_not_empty_collection("evidence_refs", &evidence_refs)?;
+
+        Ok(Self {
+            topology_proposal_id,
+            proposal_kind,
+            proposer_ref,
+            change_set_ref,
+            evidence_refs,
+            benchmark_report_refs: Vec::new(),
+            shadow_report_refs: Vec::new(),
+            canary_report_refs: Vec::new(),
+            approval_refs: Vec::new(),
+            status: TopologyProposalStatus::Drafted,
+            created_at_ms,
+            updated_at_ms: created_at_ms,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluatorConfig {
     pub model: String,
