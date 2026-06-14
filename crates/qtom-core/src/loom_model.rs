@@ -776,6 +776,21 @@ impl TopologyProposal {
             updated_at_ms: created_at_ms,
         })
     }
+
+    pub fn mark_tested(
+        mut self,
+        benchmark_report_refs: Vec<String>,
+        updated_at_ms: u64,
+    ) -> Result<Self, LoomModelError> {
+        ensure_not_empty_collection("benchmark_report_refs", &benchmark_report_refs)?;
+        ensure_increasing_timestamp(self.updated_at_ms, updated_at_ms)?;
+
+        self.benchmark_report_refs = benchmark_report_refs;
+        self.status = TopologyProposalStatus::Tested;
+        self.updated_at_ms = updated_at_ms;
+
+        Ok(self)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -1063,6 +1078,17 @@ pub fn ensure_not_empty(field: &'static str, value: &str) -> Result<(), LoomMode
 fn ensure_not_empty_collection<T>(field: &'static str, values: &[T]) -> Result<(), LoomModelError> {
     if values.is_empty() {
         Err(LoomModelError::EmptyCollection(field))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_increasing_timestamp(current: u64, next: u64) -> Result<(), LoomModelError> {
+    if next <= current {
+        Err(LoomModelError::InvalidNumericField {
+            field: "updated_at_ms",
+            reason: "must be greater than the current update time",
+        })
     } else {
         Ok(())
     }

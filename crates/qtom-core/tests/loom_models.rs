@@ -515,6 +515,59 @@ fn topology_proposal_requires_evidence_before_governance() {
     assert_eq!(err, LoomModelError::EmptyCollection("evidence_refs"));
 }
 
+#[test]
+fn topology_proposal_moves_to_tested_with_benchmark_evidence() {
+    let proposal = topology_proposal();
+
+    let tested = proposal
+        .mark_tested(vec!["inline://benchmark/report/8000".to_string()], 50_500)
+        .expect("proposal should accept benchmark evidence");
+
+    assert_eq!(tested.status, TopologyProposalStatus::Tested);
+    assert_eq!(
+        tested.benchmark_report_refs,
+        vec!["inline://benchmark/report/8000".to_string()]
+    );
+    assert_eq!(tested.created_at_ms, 50_000);
+    assert_eq!(tested.updated_at_ms, 50_500);
+    assert!(tested.shadow_report_refs.is_empty());
+    assert!(tested.canary_report_refs.is_empty());
+}
+
+#[test]
+fn topology_proposal_requires_test_evidence_and_forward_time() {
+    let missing_benchmark = topology_proposal()
+        .mark_tested(vec![], 50_500)
+        .expect_err("tested proposal should include benchmark reports");
+    assert_eq!(
+        missing_benchmark,
+        LoomModelError::EmptyCollection("benchmark_report_refs")
+    );
+
+    let stale_time = topology_proposal()
+        .mark_tested(vec!["inline://benchmark/report/8000".to_string()], 49_999)
+        .expect_err("tested proposal should move time forward");
+    assert_eq!(
+        stale_time,
+        LoomModelError::InvalidNumericField {
+            field: "updated_at_ms",
+            reason: "must be greater than the current update time",
+        }
+    );
+}
+
+fn topology_proposal() -> TopologyProposal {
+    TopologyProposal::draft(
+        8_000,
+        TopologyProposalKind::MemoryIndexVersion,
+        "curator://agent/800",
+        "inline://topology/change-set/8000",
+        vec!["inline://candidate-reduction/report/1".to_string()],
+        50_000,
+    )
+    .expect("proposal should be valid")
+}
+
 fn two_axis_space() -> GradientSpace {
     GradientSpace::new(
         44,
