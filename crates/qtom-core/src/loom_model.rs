@@ -793,6 +793,13 @@ pub struct RollbackRecord {
     pub created_at_ms: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyGovernanceStore {
+    pub proposals: Vec<TopologyProposal>,
+    pub snapshots: Vec<TopologySnapshot>,
+    pub rollback_records: Vec<RollbackRecord>,
+}
+
 impl RollbackRecord {
     pub fn new(
         rollback_id: u64,
@@ -827,6 +834,22 @@ impl RollbackRecord {
             triggered_by_ref,
             affected_route_decision_refs,
             created_at_ms,
+        })
+    }
+}
+
+impl TopologyGovernanceStore {
+    pub fn new(
+        proposals: Vec<TopologyProposal>,
+        snapshots: Vec<TopologySnapshot>,
+        rollback_records: Vec<RollbackRecord>,
+    ) -> Result<Self, LoomModelError> {
+        validate_topology_governance_records(&proposals, &snapshots, &rollback_records)?;
+
+        Ok(Self {
+            proposals,
+            snapshots,
+            rollback_records,
         })
     }
 }
@@ -1366,6 +1389,69 @@ where
     Ok(())
 }
 
+pub fn read_topology_governance_store_jsonl<P, S, R>(
+    proposals_path: P,
+    snapshots_path: S,
+    rollback_records_path: R,
+) -> Result<TopologyGovernanceStore, LoomModelError>
+where
+    P: AsRef<Path>,
+    S: AsRef<Path>,
+    R: AsRef<Path>,
+{
+    TopologyGovernanceStore::new(
+        read_topology_proposals_jsonl(proposals_path)?,
+        read_topology_snapshots_jsonl(snapshots_path)?,
+        read_rollback_records_jsonl(rollback_records_path)?,
+    )
+}
+
+fn validate_topology_governance_records(
+    proposals: &[TopologyProposal],
+    snapshots: &[TopologySnapshot],
+    rollback_records: &[RollbackRecord],
+) -> Result<(), LoomModelError> {
+    validate_unique_topology_proposal_ids(proposals.iter())?;
+    validate_unique_topology_snapshot_ids(snapshots.iter())?;
+    validate_unique_rollback_ids(rollback_records.iter())?;
+
+    let proposal_ids = proposals
+        .iter()
+        .map(|proposal| proposal.topology_proposal_id)
+        .collect::<HashSet<_>>();
+    let snapshot_ids = snapshots
+        .iter()
+        .map(|snapshot| snapshot.topology_snapshot_id)
+        .collect::<HashSet<_>>();
+
+    for snapshot in snapshots {
+        if !proposal_ids.contains(&snapshot.source_proposal_id) {
+            return Err(LoomModelError::UnknownTopologyProposalId {
+                field: "snapshot.source_proposal_id",
+                topology_proposal_id: snapshot.source_proposal_id,
+            });
+        }
+    }
+
+    for record in rollback_records {
+        if !snapshot_ids.contains(&record.from_topology_snapshot_id) {
+            return Err(LoomModelError::UnknownTopologySnapshotId {
+                field: "rollback.from_topology_snapshot_id",
+                topology_snapshot_id: record.from_topology_snapshot_id,
+            });
+        }
+
+        if !snapshot_ids.contains(&record.to_topology_snapshot_id) {
+            return Err(LoomModelError::UnknownTopologySnapshotId {
+                field: "rollback.to_topology_snapshot_id",
+                topology_snapshot_id: record.to_topology_snapshot_id,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluatorConfig {
     pub model: String,
@@ -1590,6 +1676,14 @@ pub enum LoomModelError {
     DuplicateTopologyProposalId(u64),
     DuplicateTopologySnapshotId(u64),
     DuplicateRollbackId(u64),
+    UnknownTopologyProposalId {
+        field: &'static str,
+        topology_proposal_id: u64,
+    },
+    UnknownTopologySnapshotId {
+        field: &'static str,
+        topology_snapshot_id: u64,
+    },
     InvalidStateTransition {
         from: &'static str,
         to: &'static str,
@@ -1636,6 +1730,24 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicateRollbackId(rollback_id) => {
                 write!(f, "duplicate rollback id {rollback_id}")
+            }
+            Self::UnknownTopologyProposalId {
+                field,
+                topology_proposal_id,
+            } => {
+                write!(
+                    f,
+                    "`{field}` references unknown topology proposal id {topology_proposal_id}"
+                )
+            }
+            Self::UnknownTopologySnapshotId {
+                field,
+                topology_snapshot_id,
+            } => {
+                write!(
+                    f,
+                    "`{field}` references unknown topology snapshot id {topology_snapshot_id}"
+                )
             }
             Self::InvalidStateTransition { from, to } => {
                 write!(f, "cannot transition topology proposal from {from} to {to}")

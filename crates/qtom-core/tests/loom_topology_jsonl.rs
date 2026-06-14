@@ -1,9 +1,10 @@
 use qtom_core::{
-    LoomModelError, RollbackRecord, TopologyProposal, TopologyProposalKind, TopologySnapshot,
-    TopologySnapshotStatus, append_rollback_record_jsonl, append_topology_proposal_jsonl,
-    append_topology_snapshot_jsonl, read_rollback_records_jsonl, read_topology_proposals_jsonl,
-    read_topology_snapshots_jsonl, write_rollback_records_jsonl, write_topology_proposals_jsonl,
-    write_topology_snapshots_jsonl,
+    LoomModelError, RollbackRecord, TopologyGovernanceStore, TopologyProposal,
+    TopologyProposalKind, TopologySnapshot, TopologySnapshotStatus, append_rollback_record_jsonl,
+    append_topology_proposal_jsonl, append_topology_snapshot_jsonl,
+    read_rollback_records_jsonl, read_topology_governance_store_jsonl,
+    read_topology_proposals_jsonl, read_topology_snapshots_jsonl, write_rollback_records_jsonl,
+    write_topology_proposals_jsonl, write_topology_snapshots_jsonl,
 };
 
 fn proposal(topology_proposal_id: u64) -> TopologyProposal {
@@ -44,6 +45,23 @@ fn rollback(rollback_id: u64) -> RollbackRecord {
         rollback_id,
         9_000 + rollback_id,
         8_000 + rollback_id,
+        format!("rollback reason {rollback_id}"),
+        format!("monitor://rollback/{rollback_id}"),
+        vec![format!("inline://route-decision/{rollback_id}")],
+        70_000 + rollback_id,
+    )
+    .expect("rollback record should be valid")
+}
+
+fn rollback_between(
+    rollback_id: u64,
+    from_topology_snapshot_id: u64,
+    to_topology_snapshot_id: u64,
+) -> RollbackRecord {
+    RollbackRecord::new(
+        rollback_id,
+        from_topology_snapshot_id,
+        to_topology_snapshot_id,
         format!("rollback reason {rollback_id}"),
         format!("monitor://rollback/{rollback_id}"),
         vec![format!("inline://route-decision/{rollback_id}")],
@@ -194,4 +212,73 @@ fn append_rollback_record_rejects_duplicate_rollback_id() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn topology_governance_store_reads_all_ledgers() {
+    let proposals_path = temp_jsonl_path("store-proposals");
+    let snapshots_path = temp_jsonl_path("store-snapshots");
+    let rollbacks_path = temp_jsonl_path("store-rollbacks");
+    let _ = std::fs::remove_file(&proposals_path);
+    let _ = std::fs::remove_file(&snapshots_path);
+    let _ = std::fs::remove_file(&rollbacks_path);
+    let proposals = vec![proposal(8_000), proposal(8_001)];
+    let snapshots = vec![snapshot(9_000), snapshot(9_001)];
+    let rollbacks = vec![rollback_between(10_000, 9_001, 9_000)];
+
+    write_topology_proposals_jsonl(&proposals_path, &proposals).expect("proposals should write");
+    write_topology_snapshots_jsonl(&snapshots_path, &snapshots).expect("snapshots should write");
+    write_rollback_records_jsonl(&rollbacks_path, &rollbacks).expect("rollbacks should write");
+
+    let store =
+        read_topology_governance_store_jsonl(&proposals_path, &snapshots_path, &rollbacks_path)
+            .expect("store should read");
+
+    assert_eq!(
+        store,
+        TopologyGovernanceStore {
+            proposals,
+            snapshots,
+            rollback_records: rollbacks,
+        }
+    );
+
+    let _ = std::fs::remove_file(&proposals_path);
+    let _ = std::fs::remove_file(&snapshots_path);
+    let _ = std::fs::remove_file(&rollbacks_path);
+}
+
+#[test]
+fn topology_governance_store_rejects_unknown_snapshot_references() {
+    let proposals = vec![proposal(8_000)];
+    let snapshots = vec![snapshot(9_000)];
+    let rollbacks = vec![rollback_between(10_000, 9_000, 9_999)];
+
+    let err = TopologyGovernanceStore::new(proposals, snapshots, rollbacks)
+        .expect_err("rollback should target known snapshots");
+
+    assert_eq!(
+        err,
+        LoomModelError::UnknownTopologySnapshotId {
+            field: "rollback.to_topology_snapshot_id",
+            topology_snapshot_id: 9_999,
+        }
+    );
+}
+
+#[test]
+fn topology_governance_store_rejects_unknown_source_proposals() {
+    let mut orphan_snapshot = snapshot(9_000);
+    orphan_snapshot.source_proposal_id = 8_999;
+
+    let err = TopologyGovernanceStore::new(vec![proposal(8_000)], vec![orphan_snapshot], vec![])
+        .expect_err("snapshot should cite a known proposal");
+
+    assert_eq!(
+        err,
+        LoomModelError::UnknownTopologyProposalId {
+            field: "snapshot.source_proposal_id",
+            topology_proposal_id: 8_999,
+        }
+    );
 }
