@@ -1100,6 +1100,141 @@ where
     Ok(())
 }
 
+pub fn write_topology_snapshots_jsonl<'a, I, P>(
+    path: P,
+    snapshots: I,
+) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a TopologySnapshot>,
+    P: AsRef<Path>,
+{
+    let snapshots = snapshots.into_iter().collect::<Vec<_>>();
+    validate_unique_topology_snapshot_ids(snapshots.iter().copied())?;
+
+    let file = File::create(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for snapshot in snapshots {
+        serde_json::to_writer(&mut writer, snapshot).map_err(|source| LoomModelError::Json {
+            line: None,
+            source: source.to_string(),
+        })?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| LoomModelError::Io {
+                path: path.as_ref().display().to_string(),
+                source: source.to_string(),
+            })?;
+    }
+
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+pub fn read_topology_snapshots_jsonl<P>(
+    path: P,
+) -> Result<Vec<TopologySnapshot>, LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let reader = BufReader::new(file);
+    let mut snapshots = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line.map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let snapshot: TopologySnapshot =
+            serde_json::from_str(&line).map_err(|source| LoomModelError::Json {
+                line: Some(line_number),
+                source: source.to_string(),
+            })?;
+        snapshots.push(snapshot);
+    }
+
+    validate_unique_topology_snapshot_ids(snapshots.iter())?;
+
+    Ok(snapshots)
+}
+
+pub fn append_topology_snapshot_jsonl<P>(
+    path: P,
+    snapshot: &TopologySnapshot,
+) -> Result<(), LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let mut snapshots = if path.as_ref().exists() {
+        read_topology_snapshots_jsonl(path.as_ref())?
+    } else {
+        Vec::new()
+    };
+    snapshots.push(snapshot.clone());
+    validate_unique_topology_snapshot_ids(snapshots.iter())?;
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_ref())
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    let mut writer = BufWriter::new(file);
+
+    serde_json::to_writer(&mut writer, snapshot).map_err(|source| LoomModelError::Json {
+        line: None,
+        source: source.to_string(),
+    })?;
+    writer
+        .write_all(b"\n")
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+fn validate_unique_topology_snapshot_ids<'a, I>(snapshots: I) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a TopologySnapshot>,
+{
+    let mut topology_snapshot_ids = HashSet::new();
+
+    for snapshot in snapshots {
+        if !topology_snapshot_ids.insert(snapshot.topology_snapshot_id) {
+            return Err(LoomModelError::DuplicateTopologySnapshotId(
+                snapshot.topology_snapshot_id,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluatorConfig {
     pub model: String,
@@ -1322,6 +1457,7 @@ pub enum LoomModelError {
     DuplicatePacketId(u64),
     DuplicateEvaluationId(u64),
     DuplicateTopologyProposalId(u64),
+    DuplicateTopologySnapshotId(u64),
     InvalidStateTransition {
         from: &'static str,
         to: &'static str,
@@ -1362,6 +1498,9 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicateTopologyProposalId(topology_proposal_id) => {
                 write!(f, "duplicate topology proposal id {topology_proposal_id}")
+            }
+            Self::DuplicateTopologySnapshotId(topology_snapshot_id) => {
+                write!(f, "duplicate topology snapshot id {topology_snapshot_id}")
             }
             Self::InvalidStateTransition { from, to } => {
                 write!(f, "cannot transition topology proposal from {from} to {to}")

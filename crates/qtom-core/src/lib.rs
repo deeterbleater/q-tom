@@ -41,10 +41,11 @@ pub use loom_model::{
     TopologyProposal, TopologyProposalKind, TopologyProposalStatus, TopologySnapshot,
     TopologySnapshotStatus,
     append_decommission_packet_jsonl, append_evaluation_fixture_jsonl,
-    append_topology_proposal_jsonl,
+    append_topology_proposal_jsonl, append_topology_snapshot_jsonl,
     read_decommission_packets_jsonl, write_decommission_packets_jsonl,
     read_evaluation_fixtures_jsonl, write_evaluation_fixtures_jsonl,
-    read_topology_proposals_jsonl, write_topology_proposals_jsonl,
+    read_topology_proposals_jsonl, read_topology_snapshots_jsonl, write_topology_proposals_jsonl,
+    write_topology_snapshots_jsonl,
 };
 pub use loom_projection::{
     LoomProjectionBundle, LoomReplayReport, artifact_provenance_projection,
