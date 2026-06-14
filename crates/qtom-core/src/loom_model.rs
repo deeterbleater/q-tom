@@ -730,6 +730,13 @@ pub enum TopologyProposalStatus {
     Superseded,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TopologySnapshotStatus {
+    Active,
+    Superseded,
+    RolledBack,
+}
+
 impl TopologyProposalStatus {
     fn label(self) -> &'static str {
         match self {
@@ -759,6 +766,20 @@ pub struct TopologyProposal {
     pub status: TopologyProposalStatus,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologySnapshot {
+    pub topology_snapshot_id: u64,
+    pub parent_snapshot_id: Option<u64>,
+    pub source_proposal_id: u64,
+    pub agent_registry_version: String,
+    pub gradient_space_versions: Vec<String>,
+    pub memory_index_versions: Vec<String>,
+    pub route_policy_versions: Vec<String>,
+    pub hard_constraint_policy_version: String,
+    pub status: TopologySnapshotStatus,
+    pub created_at_ms: u64,
 }
 
 impl TopologyProposal {
@@ -845,6 +866,53 @@ impl TopologyProposal {
         self.updated_at_ms = updated_at_ms;
 
         Ok(self)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn commit(
+        mut self,
+        topology_snapshot_id: u64,
+        parent_snapshot_id: Option<u64>,
+        agent_registry_version: impl Into<String>,
+        gradient_space_versions: Vec<String>,
+        memory_index_versions: Vec<String>,
+        route_policy_versions: Vec<String>,
+        hard_constraint_policy_version: impl Into<String>,
+        updated_at_ms: u64,
+    ) -> Result<(Self, TopologySnapshot), LoomModelError> {
+        ensure_status(
+            self.status,
+            TopologyProposalStatus::Approved,
+            TopologyProposalStatus::Committed,
+        )?;
+
+        let agent_registry_version = agent_registry_version.into();
+        let hard_constraint_policy_version = hard_constraint_policy_version.into();
+        ensure_not_empty("agent_registry_version", &agent_registry_version)?;
+        ensure_not_empty_collection("gradient_space_versions", &gradient_space_versions)?;
+        ensure_not_empty_collection("memory_index_versions", &memory_index_versions)?;
+        ensure_not_empty_collection("route_policy_versions", &route_policy_versions)?;
+        ensure_not_empty("hard_constraint_policy_version", &hard_constraint_policy_version)?;
+        ensure_increasing_timestamp(self.updated_at_ms, updated_at_ms)?;
+
+        self.status = TopologyProposalStatus::Committed;
+        self.updated_at_ms = updated_at_ms;
+
+        Ok((
+            self.clone(),
+            TopologySnapshot {
+                topology_snapshot_id,
+                parent_snapshot_id,
+                source_proposal_id: self.topology_proposal_id,
+                agent_registry_version,
+                gradient_space_versions,
+                memory_index_versions,
+                route_policy_versions,
+                hard_constraint_policy_version,
+                status: TopologySnapshotStatus::Active,
+                created_at_ms: updated_at_ms,
+            },
+        ))
     }
 }
 

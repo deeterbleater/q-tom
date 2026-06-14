@@ -2,7 +2,7 @@ use qtom_core::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
     GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
     LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
-    TopologyProposal, TopologyProposalKind, TopologyProposalStatus,
+    TopologyProposal, TopologyProposalKind, TopologyProposalStatus, TopologySnapshotStatus,
 };
 
 #[test]
@@ -666,6 +666,107 @@ fn topology_proposal_requires_approval_evidence_and_forward_time() {
             reason: "must be greater than the current update time",
         }
     );
+}
+
+#[test]
+fn approved_topology_proposal_commits_snapshot() {
+    let approved = approved_topology_proposal();
+
+    let (proposal, snapshot) = approved
+        .commit(
+            9_000,
+            Some(8_999),
+            "agent-registry-v2",
+            vec!["gradient-space-44-v4".to_string()],
+            vec!["memory-index-v3".to_string()],
+            vec!["route-policy-v2".to_string()],
+            "hard-constraints-v1",
+            52_000,
+        )
+        .expect("approved proposal should commit");
+
+    assert_eq!(proposal.status, TopologyProposalStatus::Committed);
+    assert_eq!(proposal.updated_at_ms, 52_000);
+    assert_eq!(snapshot.topology_snapshot_id, 9_000);
+    assert_eq!(snapshot.parent_snapshot_id, Some(8_999));
+    assert_eq!(snapshot.source_proposal_id, 8_000);
+    assert_eq!(snapshot.status, TopologySnapshotStatus::Active);
+    assert_eq!(snapshot.agent_registry_version, "agent-registry-v2");
+    assert_eq!(snapshot.gradient_space_versions, vec!["gradient-space-44-v4"]);
+    assert_eq!(snapshot.memory_index_versions, vec!["memory-index-v3"]);
+    assert_eq!(snapshot.route_policy_versions, vec!["route-policy-v2"]);
+    assert_eq!(snapshot.hard_constraint_policy_version, "hard-constraints-v1");
+    assert_eq!(snapshot.created_at_ms, 52_000);
+}
+
+#[test]
+fn topology_proposal_requires_approved_state_before_commit() {
+    let err = shadowed_topology_proposal()
+        .commit(
+            9_000,
+            Some(8_999),
+            "agent-registry-v2",
+            vec!["gradient-space-44-v4".to_string()],
+            vec!["memory-index-v3".to_string()],
+            vec!["route-policy-v2".to_string()],
+            "hard-constraints-v1",
+            52_000,
+        )
+        .expect_err("shadowed proposal should not commit before approval");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidStateTransition {
+            from: "Shadowed",
+            to: "Committed",
+        }
+    );
+}
+
+#[test]
+fn topology_commit_requires_snapshot_versions_and_forward_time() {
+    let missing_route_policy = approved_topology_proposal()
+        .commit(
+            9_000,
+            Some(8_999),
+            "agent-registry-v2",
+            vec!["gradient-space-44-v4".to_string()],
+            vec!["memory-index-v3".to_string()],
+            vec![],
+            "hard-constraints-v1",
+            52_000,
+        )
+        .expect_err("snapshot should include route policy versions");
+    assert_eq!(
+        missing_route_policy,
+        LoomModelError::EmptyCollection("route_policy_versions")
+    );
+
+    let stale_time = approved_topology_proposal()
+        .commit(
+            9_000,
+            Some(8_999),
+            "agent-registry-v2",
+            vec!["gradient-space-44-v4".to_string()],
+            vec!["memory-index-v3".to_string()],
+            vec!["route-policy-v2".to_string()],
+            "hard-constraints-v1",
+            51_500,
+        )
+        .expect_err("snapshot commit should move time forward");
+    assert_eq!(
+        stale_time,
+        LoomModelError::InvalidNumericField {
+            field: "updated_at_ms",
+            reason: "must be greater than the current update time",
+        }
+    );
+}
+
+fn approved_topology_proposal() -> TopologyProposal {
+    shadowed_topology_proposal()
+        .mark_approved(vec!["inline://approval/8000".to_string()], 51_500)
+        .expect("proposal should be approved")
 }
 
 fn shadowed_topology_proposal() -> TopologyProposal {
