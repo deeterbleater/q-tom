@@ -476,6 +476,8 @@ fn architecture_tracks_governance_safety_evidence() {
         "jsonl ledgers",
         "active_topology_snapshot",
         "apply_rollback",
+        "topologyrolledback",
+        "topology governance projection",
         "unknown proposal",
         "unknown snapshot",
         "shadow routing",
