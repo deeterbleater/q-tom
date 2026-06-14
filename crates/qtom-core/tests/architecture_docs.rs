@@ -482,6 +482,7 @@ fn architecture_tracks_governance_safety_evidence() {
         "topologycanaried",
         "topologyrolledback",
         "topology governance projection",
+        "invalidrollbackroutedecisionref",
         "unknown proposal",
         "unknown snapshot",
         "route-decision fixtures",

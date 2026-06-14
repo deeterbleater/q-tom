@@ -267,6 +267,33 @@ fn topology_governance_store_rejects_unknown_snapshot_references() {
 }
 
 #[test]
+fn topology_governance_store_rejects_non_route_decision_rollback_refs() {
+    let proposals = vec![proposal(8_000), proposal(8_001)];
+    let snapshots = vec![snapshot(9_000), snapshot(9_001)];
+    let rollback = RollbackRecord::new(
+        10_000,
+        9_001,
+        9_000,
+        "candidate recall fell below threshold",
+        "monitor://candidate-recall",
+        vec!["inline://artifact/500".to_string()],
+        53_000,
+    )
+    .expect("rollback shape should be valid before store validation");
+
+    let err = TopologyGovernanceStore::new(proposals, snapshots, vec![rollback])
+        .expect_err("rollback should cite route-decision fixtures");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidRollbackRouteDecisionRef {
+            rollback_id: 10_000,
+            route_decision_ref: "inline://artifact/500".to_string(),
+        }
+    );
+}
+
+#[test]
 fn topology_governance_store_rejects_unknown_source_proposals() {
     let mut orphan_snapshot = snapshot(9_000);
     orphan_snapshot.source_proposal_id = 8_999;

@@ -1473,6 +1473,15 @@ fn validate_topology_governance_records(
                 topology_snapshot_id: record.to_topology_snapshot_id,
             });
         }
+
+        for route_decision_ref in &record.affected_route_decision_refs {
+            if !route_decision_ref.starts_with("inline://route-decision/") {
+                return Err(LoomModelError::InvalidRollbackRouteDecisionRef {
+                    rollback_id: record.rollback_id,
+                    route_decision_ref: route_decision_ref.clone(),
+                });
+            }
+        }
     }
 
     Ok(())
@@ -1706,6 +1715,10 @@ pub enum LoomModelError {
         field: &'static str,
         topology_snapshot_id: u64,
     },
+    InvalidRollbackRouteDecisionRef {
+        rollback_id: u64,
+        route_decision_ref: String,
+    },
     InvalidStateTransition {
         from: &'static str,
         to: &'static str,
@@ -1772,6 +1785,15 @@ impl std::fmt::Display for LoomModelError {
                 write!(
                     f,
                     "`{field}` references unknown topology snapshot id {topology_snapshot_id}"
+                )
+            }
+            Self::InvalidRollbackRouteDecisionRef {
+                rollback_id,
+                route_decision_ref,
+            } => {
+                write!(
+                    f,
+                    "rollback record {rollback_id} references non-route-decision fixture `{route_decision_ref}`"
                 )
             }
             Self::InvalidStateTransition { from, to } => {
