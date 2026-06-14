@@ -826,6 +826,26 @@ impl TopologyProposal {
 
         Ok(self)
     }
+
+    pub fn mark_approved(
+        mut self,
+        approval_refs: Vec<String>,
+        updated_at_ms: u64,
+    ) -> Result<Self, LoomModelError> {
+        ensure_status(
+            self.status,
+            TopologyProposalStatus::Shadowed,
+            TopologyProposalStatus::Approved,
+        )?;
+        ensure_not_empty_collection("approval_refs", &approval_refs)?;
+        ensure_increasing_timestamp(self.updated_at_ms, updated_at_ms)?;
+
+        self.approval_refs = approval_refs;
+        self.status = TopologyProposalStatus::Approved;
+        self.updated_at_ms = updated_at_ms;
+
+        Ok(self)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

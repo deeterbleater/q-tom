@@ -614,6 +614,66 @@ fn topology_proposal_requires_shadow_evidence_and_forward_time() {
     );
 }
 
+#[test]
+fn topology_proposal_moves_to_approved_with_approval_evidence() {
+    let shadowed = shadowed_topology_proposal();
+
+    let approved = shadowed
+        .mark_approved(vec!["inline://approval/8000".to_string()], 51_500)
+        .expect("shadowed proposal should accept approval evidence");
+
+    assert_eq!(approved.status, TopologyProposalStatus::Approved);
+    assert_eq!(approved.approval_refs, vec!["inline://approval/8000".to_string()]);
+    assert_eq!(
+        approved.shadow_report_refs,
+        vec!["inline://shadow-routing/report/8000".to_string()]
+    );
+    assert_eq!(approved.updated_at_ms, 51_500);
+}
+
+#[test]
+fn topology_proposal_requires_shadowed_state_before_approval() {
+    let err = tested_topology_proposal()
+        .mark_approved(vec!["inline://approval/8000".to_string()], 51_500)
+        .expect_err("tested proposal should not be approved before shadowing");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidStateTransition {
+            from: "Tested",
+            to: "Approved",
+        }
+    );
+}
+
+#[test]
+fn topology_proposal_requires_approval_evidence_and_forward_time() {
+    let missing_approval = shadowed_topology_proposal()
+        .mark_approved(vec![], 51_500)
+        .expect_err("approved proposal should include approval refs");
+    assert_eq!(
+        missing_approval,
+        LoomModelError::EmptyCollection("approval_refs")
+    );
+
+    let stale_time = shadowed_topology_proposal()
+        .mark_approved(vec!["inline://approval/8000".to_string()], 51_000)
+        .expect_err("approved proposal should move time forward");
+    assert_eq!(
+        stale_time,
+        LoomModelError::InvalidNumericField {
+            field: "updated_at_ms",
+            reason: "must be greater than the current update time",
+        }
+    );
+}
+
+fn shadowed_topology_proposal() -> TopologyProposal {
+    tested_topology_proposal()
+        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 51_000)
+        .expect("proposal should be shadowed")
+}
+
 fn tested_topology_proposal() -> TopologyProposal {
     topology_proposal()
         .mark_tested(vec!["inline://benchmark/report/8000".to_string()], 50_500)
