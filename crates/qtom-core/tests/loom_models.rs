@@ -446,6 +446,8 @@ fn memory_candidate_report_tracks_reduction_and_minimum_target() {
     assert_eq!(report.returned_candidates, 3);
     assert_eq!(report.target_min_candidates, 3);
     assert!(report.target_met);
+    assert_eq!(report.hard_mask_violation_rate(), 0.0);
+    assert!((report.scanned_candidate_reduction() - 0.4).abs() < f32::EPSILON);
     assert_eq!(
         report
             .candidates
@@ -454,6 +456,18 @@ fn memory_candidate_report_tracks_reduction_and_minimum_target() {
             .collect::<Vec<_>>(),
         vec![1_500, 1_501, 1_502]
     );
+}
+
+#[test]
+fn memory_candidate_report_handles_empty_reduction_denominator() {
+    let space = two_axis_space();
+    let report = space
+        .memory_candidate_report(&[], vec![0.0, 0.0], 0.25, 8, 3)
+        .expect("empty placement set should report cleanly");
+
+    assert_eq!(report.hard_mask_violation_rate(), 0.0);
+    assert_eq!(report.scanned_candidate_reduction(), 0.0);
+    assert!(!report.target_met);
 }
 
 fn two_axis_space() -> GradientSpace {

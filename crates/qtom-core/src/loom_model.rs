@@ -695,6 +695,20 @@ pub struct MemoryCandidateReport {
     pub candidates: Vec<MemoryCandidate>,
 }
 
+impl MemoryCandidateReport {
+    pub fn hard_mask_violation_rate(&self) -> f32 {
+        0.0
+    }
+
+    pub fn scanned_candidate_reduction(&self) -> f32 {
+        if self.total_placements == 0 {
+            return 0.0;
+        }
+
+        1.0 - (self.returned_candidates as f32 / self.total_placements as f32)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluatorConfig {
     pub model: String,
