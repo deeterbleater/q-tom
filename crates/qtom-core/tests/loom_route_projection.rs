@@ -141,8 +141,17 @@ fn topology_governance_projection_is_derived_from_topology_events() {
     .expect("proposal should append");
     log.append(caused_by(
         event(
-            LoomEventType::TopologyCommitted,
+            LoomEventType::TopologyShadowed,
             2,
+            "inline://topology/shadow-report/8000",
+        ),
+        1,
+    ))
+    .expect("shadow should append");
+    log.append(caused_by(
+        event(
+            LoomEventType::TopologyCommitted,
+            3,
             "inline://topology/snapshot/9000",
         ),
         1,
@@ -151,10 +160,10 @@ fn topology_governance_projection_is_derived_from_topology_events() {
     log.append(caused_by(
         event(
             LoomEventType::TopologyRolledBack,
-            3,
+            4,
             "inline://topology/rollback/10000",
         ),
-        2,
+        3,
     ))
     .expect("rollback should append");
 
@@ -162,10 +171,12 @@ fn topology_governance_projection_is_derived_from_topology_events() {
 
     assert!(projection.starts_with("flowchart TD\n"));
     assert!(projection.contains("topology_proposed_1[\"TopologyProposed 8000\"]"));
-    assert!(projection.contains("topology_committed_2[\"TopologyCommitted 9002\"]"));
-    assert!(projection.contains("topology_rolled_back_3[\"TopologyRolledBack 9003\"]"));
-    assert!(projection.contains("topology_proposed_1 --> topology_committed_2"));
-    assert!(projection.contains("topology_committed_2 --> topology_rolled_back_3"));
+    assert!(projection.contains("topology_shadowed_2[\"TopologyShadowed 8000\"]"));
+    assert!(projection.contains("topology_committed_3[\"TopologyCommitted 9003\"]"));
+    assert!(projection.contains("topology_rolled_back_4[\"TopologyRolledBack 9004\"]"));
+    assert!(projection.contains("topology_proposed_1 --> topology_shadowed_2"));
+    assert!(projection.contains("topology_proposed_1 --> topology_committed_3"));
+    assert!(projection.contains("topology_committed_3 --> topology_rolled_back_4"));
 }
 
 #[test]
