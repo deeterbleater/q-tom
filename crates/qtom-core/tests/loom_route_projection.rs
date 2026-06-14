@@ -1,8 +1,33 @@
 use qtom_core::{
-    InMemoryEventLog, LoomEventError, MockTaskLoom, artifact_provenance_projection,
-    integration_group_projection, loom_projection_bundle, loom_replay_report,
-    memory_lineage_projection, route_trace_projection, task_dependency_projection,
+    InMemoryEventLog, LoomEvent, LoomEventError, LoomEventType, MockTaskLoom,
+    artifact_provenance_projection, integration_group_projection, loom_projection_bundle,
+    loom_replay_report, memory_lineage_projection, route_trace_projection,
+    task_dependency_projection, topology_governance_projection,
 };
+
+fn event(event_type: LoomEventType, event_id: u64, payload_ref: impl Into<String>) -> LoomEvent {
+    LoomEvent {
+        event_id,
+        event_type,
+        root_task_id: 1,
+        task_id: Some(0),
+        parent_task_id: None,
+        prompt_id: Some(7),
+        agent_id: None,
+        agent_role: None,
+        topology_snapshot_id: Some(9_000 + event_id),
+        payload_schema: "test.payload.v1".to_string(),
+        payload_ref: payload_ref.into(),
+        occurred_at_ms: 1_000 + event_id,
+        causation_id: None,
+        correlation_id: 99,
+    }
+}
+
+fn caused_by(mut event: LoomEvent, causation_id: u64) -> LoomEvent {
+    event.causation_id = Some(causation_id);
+    event
+}
 
 #[test]
 fn route_trace_projection_is_derived_from_loom_events() {
@@ -106,6 +131,44 @@ fn integration_group_projection_is_derived_from_task_and_integration_events() {
 }
 
 #[test]
+fn topology_governance_projection_is_derived_from_topology_events() {
+    let mut log = InMemoryEventLog::new();
+    log.append(event(
+        LoomEventType::TopologyProposed,
+        1,
+        "inline://topology/proposal/8000",
+    ))
+    .expect("proposal should append");
+    log.append(caused_by(
+        event(
+            LoomEventType::TopologyCommitted,
+            2,
+            "inline://topology/snapshot/9000",
+        ),
+        1,
+    ))
+    .expect("commit should append");
+    log.append(caused_by(
+        event(
+            LoomEventType::TopologyRolledBack,
+            3,
+            "inline://topology/rollback/10000",
+        ),
+        2,
+    ))
+    .expect("rollback should append");
+
+    let projection = topology_governance_projection(&log);
+
+    assert!(projection.starts_with("flowchart TD\n"));
+    assert!(projection.contains("topology_proposed_1[\"TopologyProposed 8000\"]"));
+    assert!(projection.contains("topology_committed_2[\"TopologyCommitted 9002\"]"));
+    assert!(projection.contains("topology_rolled_back_3[\"TopologyRolledBack 9003\"]"));
+    assert!(projection.contains("topology_proposed_1 --> topology_committed_2"));
+    assert!(projection.contains("topology_committed_2 --> topology_rolled_back_3"));
+}
+
+#[test]
 fn projection_bundle_contains_all_current_replay_views() {
     let output = MockTaskLoom::default()
         .run_prompt(7, 10, "prototype the routing boundary")
@@ -130,6 +193,7 @@ fn projection_bundle_contains_all_current_replay_views() {
             .memory_lineage
             .contains("decommission_2003 --> memory_4000")
     );
+    assert!(bundle.topology_governance.starts_with("flowchart TD\n"));
 }
 
 #[test]

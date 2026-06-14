@@ -14,6 +14,7 @@ pub struct LoomProjectionBundle {
     pub artifact_provenance: String,
     pub integration_group: String,
     pub memory_lineage: String,
+    pub topology_governance: String,
 }
 
 pub fn loom_projection_bundle(log: &InMemoryEventLog) -> LoomProjectionBundle {
@@ -23,6 +24,7 @@ pub fn loom_projection_bundle(log: &InMemoryEventLog) -> LoomProjectionBundle {
         artifact_provenance: artifact_provenance_projection(log),
         integration_group: integration_group_projection(log),
         memory_lineage: memory_lineage_projection(log),
+        topology_governance: topology_governance_projection(log),
     }
 }
 
@@ -341,6 +343,77 @@ pub fn memory_lineage_projection(log: &InMemoryEventLog) -> String {
     }
 
     output
+}
+
+pub fn topology_governance_projection(log: &InMemoryEventLog) -> String {
+    let events = log.replay(ReplayCursor::start()).collect::<Vec<_>>();
+    let topology_events = events
+        .iter()
+        .copied()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                LoomEventType::TopologyProposed
+                    | LoomEventType::TopologyCommitted
+                    | LoomEventType::TopologyRolledBack
+            )
+        })
+        .collect::<Vec<_>>();
+    let topology_events_by_id = topology_events
+        .iter()
+        .copied()
+        .map(|event| (event.event_id, event))
+        .collect::<HashMap<_, _>>();
+
+    let mut output = String::from("flowchart TD\n");
+
+    for event in topology_events {
+        let node = topology_node_id(event);
+        let label = topology_label(event);
+        writeln!(output, "  {node}[\"{label}\"]").expect("writing to String should not fail");
+
+        if let Some(causation_id) = event.causation_id {
+            if let Some(cause) = topology_events_by_id.get(&causation_id) {
+                let cause_node = topology_node_id(cause);
+                writeln!(output, "  {cause_node} --> {node}")
+                    .expect("writing to String should not fail");
+            }
+        }
+    }
+
+    output
+}
+
+fn topology_node_id(event: &LoomEvent) -> String {
+    match event.event_type {
+        LoomEventType::TopologyProposed => format!("topology_proposed_{}", event.event_id),
+        LoomEventType::TopologyCommitted => format!("topology_committed_{}", event.event_id),
+        LoomEventType::TopologyRolledBack => format!("topology_rolled_back_{}", event.event_id),
+        _ => format!("topology_event_{}", event.event_id),
+    }
+}
+
+fn topology_label(event: &LoomEvent) -> String {
+    match event.event_type {
+        LoomEventType::TopologyProposed => {
+            format!("TopologyProposed {}", ref_tail(event.payload_ref.as_str()))
+        }
+        LoomEventType::TopologyCommitted => {
+            let snapshot_id = event
+                .topology_snapshot_id
+                .map(|snapshot_id| snapshot_id.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("TopologyCommitted {snapshot_id}")
+        }
+        LoomEventType::TopologyRolledBack => {
+            let snapshot_id = event
+                .topology_snapshot_id
+                .map(|snapshot_id| snapshot_id.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("TopologyRolledBack {snapshot_id}")
+        }
+        _ => format!("TopologyEvent {}", event.event_id),
+    }
 }
 
 fn route_decision_id(event: &LoomEvent) -> &str {

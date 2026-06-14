@@ -52,6 +52,7 @@ pub use loom_projection::{
     LoomProjectionBundle, LoomReplayReport, artifact_provenance_projection,
     integration_group_projection, loom_projection_bundle, loom_replay_report,
     memory_lineage_projection, route_trace_projection, task_dependency_projection,
+    topology_governance_projection,
 };
 pub use loom_route::{
     RouteDecision, TaskRouteDecisionEventConfig, TaskRouteRequestConfig,
