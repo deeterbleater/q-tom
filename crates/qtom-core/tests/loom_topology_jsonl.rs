@@ -1,10 +1,10 @@
 use qtom_core::{
     LoomModelError, RollbackRecord, TopologyGovernanceStore, TopologyProposal,
     TopologyProposalKind, TopologySnapshot, TopologySnapshotStatus, append_rollback_record_jsonl,
-    append_topology_proposal_jsonl, append_topology_snapshot_jsonl,
-    read_rollback_records_jsonl, read_topology_governance_store_jsonl,
-    read_topology_proposals_jsonl, read_topology_snapshots_jsonl, write_rollback_records_jsonl,
-    write_topology_proposals_jsonl, write_topology_snapshots_jsonl,
+    append_topology_proposal_jsonl, append_topology_snapshot_jsonl, read_rollback_records_jsonl,
+    read_topology_governance_store_jsonl, read_topology_proposals_jsonl,
+    read_topology_snapshots_jsonl, write_rollback_records_jsonl, write_topology_proposals_jsonl,
+    write_topology_snapshots_jsonl,
 };
 
 fn proposal(topology_proposal_id: u64) -> TopologyProposal {
@@ -281,4 +281,44 @@ fn topology_governance_store_rejects_unknown_source_proposals() {
             topology_proposal_id: 8_999,
         }
     );
+}
+
+#[test]
+fn topology_governance_store_returns_latest_active_snapshot() {
+    let proposals = vec![proposal(8_000), proposal(8_001), proposal(8_002)];
+    let active_parent = snapshot(9_000);
+    let mut superseded = snapshot(9_001);
+    superseded.status = TopologySnapshotStatus::Superseded;
+    let active_latest = snapshot(9_002);
+    let store = TopologyGovernanceStore::new(
+        proposals,
+        vec![active_parent, superseded, active_latest],
+        vec![],
+    )
+    .expect("store should be valid");
+
+    assert_eq!(
+        store
+            .active_topology_snapshot()
+            .expect("active snapshot should exist")
+            .topology_snapshot_id,
+        9_002
+    );
+}
+
+#[test]
+fn topology_governance_store_rejects_missing_active_snapshot() {
+    let proposals = vec![proposal(8_000), proposal(8_001)];
+    let mut superseded = snapshot(9_000);
+    superseded.status = TopologySnapshotStatus::Superseded;
+    let mut rolled_back = snapshot(9_001);
+    rolled_back.status = TopologySnapshotStatus::RolledBack;
+    let store = TopologyGovernanceStore::new(proposals, vec![superseded, rolled_back], vec![])
+        .expect("store should be valid");
+
+    let err = store
+        .active_topology_snapshot()
+        .expect_err("missing active snapshot should fail");
+
+    assert_eq!(err, LoomModelError::NoActiveTopologySnapshot);
 }

@@ -1,8 +1,8 @@
 use qtom_core::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
     GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
-    LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
-    RollbackRecord, TopologyProposal, TopologyProposalKind, TopologyProposalStatus,
+    LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, RollbackRecord,
+    TaskEnvelope, TopologyProposal, TopologyProposalKind, TopologyProposalStatus,
     TopologySnapshotStatus,
 };
 
@@ -488,7 +488,10 @@ fn topology_proposal_preserves_governance_evidence() {
     .expect("proposal should be valid");
 
     assert_eq!(proposal.topology_proposal_id, 8_000);
-    assert_eq!(proposal.proposal_kind, TopologyProposalKind::MemoryIndexVersion);
+    assert_eq!(
+        proposal.proposal_kind,
+        TopologyProposalKind::MemoryIndexVersion
+    );
     assert_eq!(proposal.proposer_ref, "curator://agent/800");
     assert_eq!(proposal.change_set_ref, "inline://topology/change-set/8000");
     assert_eq!(proposal.status, TopologyProposalStatus::Drafted);
@@ -562,7 +565,10 @@ fn topology_proposal_moves_to_shadowed_with_shadow_evidence() {
     let tested = tested_topology_proposal();
 
     let shadowed = tested
-        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 51_000)
+        .mark_shadowed(
+            vec!["inline://shadow-routing/report/8000".to_string()],
+            51_000,
+        )
         .expect("tested proposal should accept shadow evidence");
 
     assert_eq!(shadowed.status, TopologyProposalStatus::Shadowed);
@@ -581,7 +587,10 @@ fn topology_proposal_moves_to_shadowed_with_shadow_evidence() {
 #[test]
 fn topology_proposal_requires_tested_state_before_shadowing() {
     let err = topology_proposal()
-        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 51_000)
+        .mark_shadowed(
+            vec!["inline://shadow-routing/report/8000".to_string()],
+            51_000,
+        )
         .expect_err("draft proposal should not be shadowed");
 
     assert_eq!(
@@ -604,7 +613,10 @@ fn topology_proposal_requires_shadow_evidence_and_forward_time() {
     );
 
     let stale_time = tested_topology_proposal()
-        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 50_500)
+        .mark_shadowed(
+            vec!["inline://shadow-routing/report/8000".to_string()],
+            50_500,
+        )
         .expect_err("shadowed proposal should move time forward");
     assert_eq!(
         stale_time,
@@ -624,7 +636,10 @@ fn topology_proposal_moves_to_approved_with_approval_evidence() {
         .expect("shadowed proposal should accept approval evidence");
 
     assert_eq!(approved.status, TopologyProposalStatus::Approved);
-    assert_eq!(approved.approval_refs, vec!["inline://approval/8000".to_string()]);
+    assert_eq!(
+        approved.approval_refs,
+        vec!["inline://approval/8000".to_string()]
+    );
     assert_eq!(
         approved.shadow_report_refs,
         vec!["inline://shadow-routing/report/8000".to_string()]
@@ -693,10 +708,16 @@ fn approved_topology_proposal_commits_snapshot() {
     assert_eq!(snapshot.source_proposal_id, 8_000);
     assert_eq!(snapshot.status, TopologySnapshotStatus::Active);
     assert_eq!(snapshot.agent_registry_version, "agent-registry-v2");
-    assert_eq!(snapshot.gradient_space_versions, vec!["gradient-space-44-v4"]);
+    assert_eq!(
+        snapshot.gradient_space_versions,
+        vec!["gradient-space-44-v4"]
+    );
     assert_eq!(snapshot.memory_index_versions, vec!["memory-index-v3"]);
     assert_eq!(snapshot.route_policy_versions, vec!["route-policy-v2"]);
-    assert_eq!(snapshot.hard_constraint_policy_version, "hard-constraints-v1");
+    assert_eq!(
+        snapshot.hard_constraint_policy_version,
+        "hard-constraints-v1"
+    );
     assert_eq!(snapshot.created_at_ms, 52_000);
 }
 
@@ -845,7 +866,10 @@ fn approved_topology_proposal() -> TopologyProposal {
 
 fn shadowed_topology_proposal() -> TopologyProposal {
     tested_topology_proposal()
-        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 51_000)
+        .mark_shadowed(
+            vec!["inline://shadow-routing/report/8000".to_string()],
+            51_000,
+        )
         .expect("proposal should be shadowed")
 }
 

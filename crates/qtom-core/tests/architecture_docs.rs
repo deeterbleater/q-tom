@@ -180,7 +180,10 @@ fn lifecycle_flows_cover_main_system_paths() {
     ];
 
     for flow in required_flows {
-        assert!(flows.contains(flow), "lifecycle flows should cover `{flow}`");
+        assert!(
+            flows.contains(flow),
+            "lifecycle flows should cover `{flow}`"
+        );
     }
 
     let required_flow_terms = ["ordered trace", "emitted events", "diagram", "replay"];
@@ -257,7 +260,10 @@ fn mvp_roadmap_covers_build_phases() {
     ];
 
     for phase in required_phases {
-        assert!(roadmap.contains(phase), "mvp roadmap should cover `{phase}`");
+        assert!(
+            roadmap.contains(phase),
+            "mvp roadmap should cover `{phase}`"
+        );
     }
 
     let required_constraints = [

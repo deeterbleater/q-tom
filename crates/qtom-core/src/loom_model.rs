@@ -852,6 +852,14 @@ impl TopologyGovernanceStore {
             rollback_records,
         })
     }
+
+    pub fn active_topology_snapshot(&self) -> Result<&TopologySnapshot, LoomModelError> {
+        self.snapshots
+            .iter()
+            .filter(|snapshot| snapshot.status == TopologySnapshotStatus::Active)
+            .max_by_key(|snapshot| (snapshot.created_at_ms, snapshot.topology_snapshot_id))
+            .ok_or(LoomModelError::NoActiveTopologySnapshot)
+    }
 }
 
 impl TopologyProposal {
@@ -964,7 +972,10 @@ impl TopologyProposal {
         ensure_not_empty_collection("gradient_space_versions", &gradient_space_versions)?;
         ensure_not_empty_collection("memory_index_versions", &memory_index_versions)?;
         ensure_not_empty_collection("route_policy_versions", &route_policy_versions)?;
-        ensure_not_empty("hard_constraint_policy_version", &hard_constraint_policy_version)?;
+        ensure_not_empty(
+            "hard_constraint_policy_version",
+            &hard_constraint_policy_version,
+        )?;
         ensure_increasing_timestamp(self.updated_at_ms, updated_at_ms)?;
 
         self.status = TopologyProposalStatus::Committed;
@@ -988,10 +999,7 @@ impl TopologyProposal {
     }
 }
 
-pub fn write_topology_proposals_jsonl<'a, I, P>(
-    path: P,
-    proposals: I,
-) -> Result<(), LoomModelError>
+pub fn write_topology_proposals_jsonl<'a, I, P>(path: P, proposals: I) -> Result<(), LoomModelError>
 where
     I: IntoIterator<Item = &'a TopologyProposal>,
     P: AsRef<Path>,
@@ -1026,9 +1034,7 @@ where
     Ok(())
 }
 
-pub fn read_topology_proposals_jsonl<P>(
-    path: P,
-) -> Result<Vec<TopologyProposal>, LoomModelError>
+pub fn read_topology_proposals_jsonl<P>(path: P) -> Result<Vec<TopologyProposal>, LoomModelError>
 where
     P: AsRef<Path>,
 {
@@ -1123,10 +1129,7 @@ where
     Ok(())
 }
 
-pub fn write_topology_snapshots_jsonl<'a, I, P>(
-    path: P,
-    snapshots: I,
-) -> Result<(), LoomModelError>
+pub fn write_topology_snapshots_jsonl<'a, I, P>(path: P, snapshots: I) -> Result<(), LoomModelError>
 where
     I: IntoIterator<Item = &'a TopologySnapshot>,
     P: AsRef<Path>,
@@ -1161,9 +1164,7 @@ where
     Ok(())
 }
 
-pub fn read_topology_snapshots_jsonl<P>(
-    path: P,
-) -> Result<Vec<TopologySnapshot>, LoomModelError>
+pub fn read_topology_snapshots_jsonl<P>(path: P) -> Result<Vec<TopologySnapshot>, LoomModelError>
 where
     P: AsRef<Path>,
 {
@@ -1258,10 +1259,7 @@ where
     Ok(())
 }
 
-pub fn write_rollback_records_jsonl<'a, I, P>(
-    path: P,
-    records: I,
-) -> Result<(), LoomModelError>
+pub fn write_rollback_records_jsonl<'a, I, P>(path: P, records: I) -> Result<(), LoomModelError>
 where
     I: IntoIterator<Item = &'a RollbackRecord>,
     P: AsRef<Path>,
@@ -1532,10 +1530,7 @@ impl EvaluationFixture {
     }
 }
 
-pub fn write_evaluation_fixtures_jsonl<'a, I, P>(
-    path: P,
-    fixtures: I,
-) -> Result<(), LoomModelError>
+pub fn write_evaluation_fixtures_jsonl<'a, I, P>(path: P, fixtures: I) -> Result<(), LoomModelError>
 where
     I: IntoIterator<Item = &'a EvaluationFixture>,
     P: AsRef<Path>,
@@ -1570,9 +1565,7 @@ where
     Ok(())
 }
 
-pub fn read_evaluation_fixtures_jsonl<P>(
-    path: P,
-) -> Result<Vec<EvaluationFixture>, LoomModelError>
+pub fn read_evaluation_fixtures_jsonl<P>(path: P) -> Result<Vec<EvaluationFixture>, LoomModelError>
 where
     P: AsRef<Path>,
 {
@@ -1676,6 +1669,7 @@ pub enum LoomModelError {
     DuplicateTopologyProposalId(u64),
     DuplicateTopologySnapshotId(u64),
     DuplicateRollbackId(u64),
+    NoActiveTopologySnapshot,
     UnknownTopologyProposalId {
         field: &'static str,
         topology_proposal_id: u64,
@@ -1730,6 +1724,9 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicateRollbackId(rollback_id) => {
                 write!(f, "duplicate rollback id {rollback_id}")
+            }
+            Self::NoActiveTopologySnapshot => {
+                write!(f, "no active topology snapshot is available")
             }
             Self::UnknownTopologyProposalId {
                 field,

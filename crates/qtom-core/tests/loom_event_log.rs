@@ -635,8 +635,8 @@ fn replay_validation_rejects_artifact_ready_caused_by_different_task_declaration
         ),
     ];
 
-    let err = validate_events(&events)
-        .expect_err("artifact_ready should match declaration task context");
+    let err =
+        validate_events(&events).expect_err("artifact_ready should match declaration task context");
 
     assert_eq!(
         err,
@@ -747,8 +747,8 @@ fn replay_validation_rejects_memory_node_with_different_task_evidence() {
         caused_by(event(LoomEventType::MemoryNodeCreated, 2, 10), 1),
     ];
 
-    let err = validate_events(&events)
-        .expect_err("memory node should match decommission task context");
+    let err =
+        validate_events(&events).expect_err("memory node should match decommission task context");
 
     assert_eq!(
         err,
@@ -762,8 +762,7 @@ fn replay_validation_rejects_memory_node_with_different_task_evidence() {
 
 #[test]
 fn replay_validation_rejects_memory_node_with_different_root_evidence() {
-    let mut decommissioned =
-        with_root_task(event(LoomEventType::AgentDecommissioned, 1, 10), 2);
+    let mut decommissioned = with_root_task(event(LoomEventType::AgentDecommissioned, 1, 10), 2);
     decommissioned.agent_id = Some(42);
 
     let events = vec![
@@ -771,8 +770,8 @@ fn replay_validation_rejects_memory_node_with_different_root_evidence() {
         caused_by(event(LoomEventType::MemoryNodeCreated, 2, 10), 1),
     ];
 
-    let err = validate_events(&events)
-        .expect_err("memory node should match decommission root context");
+    let err =
+        validate_events(&events).expect_err("memory node should match decommission root context");
 
     assert_eq!(
         err,
