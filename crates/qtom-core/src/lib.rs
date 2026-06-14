@@ -36,8 +36,9 @@ pub use loom_mock::{
 pub use loom_model::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, EvaluationFixture,
     EvaluatorConfig, GradientAxis, GradientSpace, IntegrationGroup, IntegrationReport,
-    IntegrationStatus, JoinPolicy, LoomModelError, MemoryCandidate, MemoryNode, MemoryNodeKind,
-    MemoryPlacement, PlanNode, TaskEnvelope, append_decommission_packet_jsonl,
+    IntegrationStatus, JoinPolicy, LoomModelError, MemoryCandidate, MemoryCandidateReport,
+    MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
+    append_decommission_packet_jsonl,
     read_decommission_packets_jsonl, write_decommission_packets_jsonl,
 };
 pub use loom_projection::{

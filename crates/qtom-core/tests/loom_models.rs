@@ -425,6 +425,37 @@ fn memory_candidates_allow_zero_budget() {
     assert!(candidates.is_empty());
 }
 
+#[test]
+fn memory_candidate_report_tracks_reduction_and_minimum_target() {
+    let space = two_axis_space();
+    let placements = vec![
+        placement(9_000, 1_500, 44, 3, vec![0.10, 0.10]),
+        placement(9_001, 1_501, 44, 3, vec![0.20, 0.20]),
+        placement(9_002, 1_502, 44, 3, vec![0.30, 0.30]),
+        placement(9_003, 1_503, 44, 3, vec![0.90, 0.90]),
+        placement(9_004, 1_504, 44, 2, vec![0.05, 0.05]),
+    ];
+
+    let report = space
+        .memory_candidate_report(&placements, vec![0.0, 0.0], 0.25, 8, 3)
+        .expect("candidate report should succeed");
+
+    assert_eq!(report.total_placements, 5);
+    assert_eq!(report.hard_masked_placements, 4);
+    assert_eq!(report.radius_matched_candidates, 3);
+    assert_eq!(report.returned_candidates, 3);
+    assert_eq!(report.target_min_candidates, 3);
+    assert!(report.target_met);
+    assert_eq!(
+        report
+            .candidates
+            .iter()
+            .map(|candidate| candidate.memory_node_id)
+            .collect::<Vec<_>>(),
+        vec![1_500, 1_501, 1_502]
+    );
+}
+
 fn two_axis_space() -> GradientSpace {
     GradientSpace::new(
         44,

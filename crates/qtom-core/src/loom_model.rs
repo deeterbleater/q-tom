@@ -577,6 +577,19 @@ impl GradientSpace {
         radius_sq: f32,
         budget: usize,
     ) -> Result<Vec<MemoryCandidate>, LoomModelError> {
+        Ok(self
+            .memory_candidate_report(placements, query_coordinates, radius_sq, budget, 0)?
+            .candidates)
+    }
+
+    pub fn memory_candidate_report(
+        &self,
+        placements: &[MemoryPlacement],
+        query_coordinates: Vec<f32>,
+        radius_sq: f32,
+        budget: usize,
+        target_min_candidates: usize,
+    ) -> Result<MemoryCandidateReport, LoomModelError> {
         if query_coordinates.len() != self.axes.len() {
             return Err(LoomModelError::InvalidNumericField {
                 field: "query_coordinates",
@@ -591,10 +604,7 @@ impl GradientSpace {
             });
         }
 
-        if budget == 0 {
-            return Ok(Vec::new());
-        }
-
+        let mut hard_masked_placements = 0;
         let mut candidates = Vec::new();
         for placement in placements {
             if placement.gradient_space_id != self.gradient_space_id
@@ -602,6 +612,7 @@ impl GradientSpace {
             {
                 continue;
             }
+            hard_masked_placements += 1;
 
             if placement.coordinates.len() != self.axes.len() {
                 return Err(LoomModelError::InvalidNumericField {
@@ -638,9 +649,19 @@ impl GradientSpace {
                 .then_with(|| left.memory_node_id.cmp(&right.memory_node_id))
                 .then_with(|| left.placement_id.cmp(&right.placement_id))
         });
+        let radius_matched_candidates = candidates.len();
         candidates.truncate(budget);
+        let returned_candidates = candidates.len();
 
-        Ok(candidates)
+        Ok(MemoryCandidateReport {
+            total_placements: placements.len(),
+            hard_masked_placements,
+            radius_matched_candidates,
+            returned_candidates,
+            target_min_candidates,
+            target_met: radius_matched_candidates >= target_min_candidates,
+            candidates,
+        })
     }
 }
 
@@ -661,6 +682,17 @@ pub struct MemoryCandidate {
     pub gradient_space_id: u64,
     pub gradient_space_version: u64,
     pub distance_sq: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemoryCandidateReport {
+    pub total_placements: usize,
+    pub hard_masked_placements: usize,
+    pub radius_matched_candidates: usize,
+    pub returned_candidates: usize,
+    pub target_min_candidates: usize,
+    pub target_met: bool,
+    pub candidates: Vec<MemoryCandidate>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
