@@ -860,6 +860,34 @@ impl TopologyGovernanceStore {
             .max_by_key(|snapshot| (snapshot.created_at_ms, snapshot.topology_snapshot_id))
             .ok_or(LoomModelError::NoActiveTopologySnapshot)
     }
+
+    pub fn apply_rollback(
+        mut self,
+        rollback_record: RollbackRecord,
+    ) -> Result<Self, LoomModelError> {
+        let mut rollback_records = self.rollback_records.clone();
+        rollback_records.push(rollback_record.clone());
+        validate_topology_governance_records(&self.proposals, &self.snapshots, &rollback_records)?;
+
+        for snapshot in &mut self.snapshots {
+            if snapshot.topology_snapshot_id == rollback_record.to_topology_snapshot_id {
+                snapshot.status = TopologySnapshotStatus::Active;
+            } else if snapshot.topology_snapshot_id == rollback_record.from_topology_snapshot_id {
+                snapshot.status = TopologySnapshotStatus::RolledBack;
+            } else if snapshot.status == TopologySnapshotStatus::Active {
+                snapshot.status = TopologySnapshotStatus::Superseded;
+            }
+        }
+
+        self.rollback_records = rollback_records;
+        validate_topology_governance_records(
+            &self.proposals,
+            &self.snapshots,
+            &self.rollback_records,
+        )?;
+
+        Ok(self)
+    }
 }
 
 impl TopologyProposal {

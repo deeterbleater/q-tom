@@ -322,3 +322,69 @@ fn topology_governance_store_rejects_missing_active_snapshot() {
 
     assert_eq!(err, LoomModelError::NoActiveTopologySnapshot);
 }
+
+#[test]
+fn topology_governance_store_applies_rollback_to_active_snapshot() {
+    let proposals = vec![proposal(8_000), proposal(8_001), proposal(8_002)];
+    let mut previous_good = snapshot(9_000);
+    previous_good.status = TopologySnapshotStatus::Superseded;
+    let mut failed_active = snapshot(9_001);
+    failed_active.status = TopologySnapshotStatus::Active;
+    let mut unrelated_active = snapshot(9_002);
+    unrelated_active.status = TopologySnapshotStatus::Active;
+    let rollback_record = rollback_between(10_000, 9_001, 9_000);
+    let store = TopologyGovernanceStore::new(
+        proposals,
+        vec![previous_good, failed_active, unrelated_active],
+        vec![],
+    )
+    .expect("store should be valid");
+
+    let rolled_back = store
+        .apply_rollback(rollback_record.clone())
+        .expect("rollback should apply");
+
+    assert_eq!(rolled_back.rollback_records, vec![rollback_record]);
+    assert_eq!(
+        rolled_back
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.topology_snapshot_id == 9_001)
+            .expect("failed snapshot should remain")
+            .status,
+        TopologySnapshotStatus::RolledBack
+    );
+    assert_eq!(
+        rolled_back
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.topology_snapshot_id == 9_002)
+            .expect("unrelated active snapshot should remain")
+            .status,
+        TopologySnapshotStatus::Superseded
+    );
+    assert_eq!(
+        rolled_back
+            .active_topology_snapshot()
+            .expect("rollback target should be active")
+            .topology_snapshot_id,
+        9_000
+    );
+}
+
+#[test]
+fn topology_governance_store_rejects_duplicate_rollback_on_apply() {
+    let proposals = vec![proposal(8_000), proposal(8_001)];
+    let store = TopologyGovernanceStore::new(
+        proposals,
+        vec![snapshot(9_000), snapshot(9_001)],
+        vec![rollback_between(10_000, 9_001, 9_000)],
+    )
+    .expect("store should be valid");
+
+    let err = store
+        .apply_rollback(rollback_between(10_000, 9_001, 9_000))
+        .expect_err("duplicate rollback id should fail");
+
+    assert_eq!(err, LoomModelError::DuplicateRollbackId(10_000));
+}
