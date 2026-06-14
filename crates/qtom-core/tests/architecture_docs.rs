@@ -141,6 +141,7 @@ fn event_vocabulary_covers_replay_events() {
         "index_updated",
         "route_decision_recorded",
         "topology_proposed",
+        "topology_shadowed",
         "topology_committed",
         "topology_rolled_back",
     ];

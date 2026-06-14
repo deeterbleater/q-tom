@@ -375,6 +375,27 @@ fn topology_rolled_back_requires_committed_causation() {
 }
 
 #[test]
+fn topology_shadowed_requires_proposed_causation() {
+    let mut log = InMemoryEventLog::new();
+    log.append(event(LoomEventType::TaskCreated, 1, 10))
+        .expect("task_created should append");
+
+    let err = log
+        .append(caused_by(event(LoomEventType::TopologyShadowed, 2, 0), 1))
+        .expect_err("topology_shadowed should be caused by a topology proposal");
+
+    assert_eq!(
+        err,
+        LoomEventError::InvalidCausationType {
+            event_type: LoomEventType::TopologyShadowed,
+            causation_id: 1,
+            expected: LoomEventType::TopologyProposed,
+            actual: LoomEventType::TaskCreated,
+        }
+    );
+}
+
+#[test]
 fn replay_validation_reports_event_counts() {
     let mut log = InMemoryEventLog::new();
 
@@ -414,9 +435,11 @@ fn replay_validation_reports_lifecycle_counts() {
         .expect("memory_node_created should append");
     log.append(event(LoomEventType::TopologyProposed, 7, 0))
         .expect("topology_proposed should append");
-    log.append(caused_by(event(LoomEventType::TopologyCommitted, 8, 0), 7))
+    log.append(caused_by(event(LoomEventType::TopologyShadowed, 8, 0), 7))
+        .expect("topology_shadowed should append");
+    log.append(caused_by(event(LoomEventType::TopologyCommitted, 9, 0), 7))
         .expect("topology_committed should append");
-    log.append(caused_by(event(LoomEventType::TopologyRolledBack, 9, 0), 8))
+    log.append(caused_by(event(LoomEventType::TopologyRolledBack, 10, 0), 9))
         .expect("topology_rolled_back should append");
 
     let report = log.validate_replay().expect("replay should validate");
@@ -426,6 +449,7 @@ fn replay_validation_reports_lifecycle_counts() {
     assert_eq!(report.completion_count, 1);
     assert_eq!(report.decommission_count, 1);
     assert_eq!(report.memory_node_count, 1);
+    assert_eq!(report.topology_shadow_count, 1);
     assert_eq!(report.topology_commit_count, 1);
     assert_eq!(report.topology_rollback_count, 1);
 }
