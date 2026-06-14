@@ -464,6 +464,32 @@ fn architecture_tracks_current_evidence_gate_status() {
 }
 
 #[test]
+fn architecture_tracks_governance_safety_evidence() {
+    let architecture_path = repo_root().join("docs/architecture.md");
+    let architecture = fs::read_to_string(&architecture_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", architecture_path.display()));
+    let architecture = architecture.to_lowercase();
+
+    let required_terms = [
+        "topologygovernancestore",
+        "jsonl ledgers",
+        "active_topology_snapshot",
+        "apply_rollback",
+        "unknown proposal",
+        "unknown snapshot",
+        "shadow routing",
+        "canary",
+    ];
+
+    for term in required_terms {
+        assert!(
+            architecture.contains(term),
+            "architecture doc should track governance evidence term `{term}`"
+        );
+    }
+}
+
+#[test]
 fn architecture_doc_consolidates_outline() {
     let architecture_path = repo_root().join("docs/architecture.md");
     let architecture = fs::read_to_string(&architecture_path)

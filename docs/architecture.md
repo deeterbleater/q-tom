@@ -318,7 +318,7 @@ The architecture is promoted claim by claim. Current gate status:
 | Candidate reduction | Partial. | The candidate reduction report, `MemoryCandidateReport`, records total placements, hard-mask survivors, radius matches, returned candidates, target status, hard-mask violation rate, and scanned-candidate reduction. | Measure recall and p99 latency against exact full-scan routing before trusting candidate reduction without fallback. |
 | Evaluator scaffolding | Cleared for stored fixtures. | The checked-in mock evaluator fixture preserves evaluator model, rubric version, prompt version, scoring schema version, seed, task ID, artifact refs, score, and rationale. | Add real evaluator API invocation behind configuration only after local-agent readiness gates pass. |
 | Local agent usefulness | Open. | No Qwen-backed role has been promoted yet. | Prove prompt/tool/MCP/memory profile differences with versioned evaluator fixtures. |
-| Governance safety | Open. | Governance policy is documented. | Add proposal, shadow-routing, canary, commit, and rollback fixtures. |
+| Governance safety | Partial. | `TopologyGovernanceStore` reads proposal, snapshot, and rollback JSONL ledgers together; validates unknown proposal and unknown snapshot references; resolves `active_topology_snapshot`; and applies rollback through `apply_rollback` by appending the rollback record, activating the target snapshot, rolling back the failed snapshot, and superseding other active snapshots. | Add shadow routing and canary evidence, then connect governance records to replay events and route-decision fixtures. |
 
 ## 15. Evaluation And Benchmarking
 
