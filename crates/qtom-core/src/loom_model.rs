@@ -709,7 +709,7 @@ impl MemoryCandidateReport {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TopologyProposalKind {
     Axis,
     RoutePolicy,
@@ -718,7 +718,7 @@ pub enum TopologyProposalKind {
     BenchmarkRubric,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TopologyProposalStatus {
     Drafted,
     Tested,
@@ -730,7 +730,7 @@ pub enum TopologyProposalStatus {
     Superseded,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TopologySnapshotStatus {
     Active,
     Superseded,
@@ -752,7 +752,7 @@ impl TopologyProposalStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologyProposal {
     pub topology_proposal_id: u64,
     pub proposal_kind: TopologyProposalKind,
@@ -768,7 +768,7 @@ pub struct TopologyProposal {
     pub updated_at_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologySnapshot {
     pub topology_snapshot_id: u64,
     pub parent_snapshot_id: Option<u64>,
@@ -782,7 +782,7 @@ pub struct TopologySnapshot {
     pub created_at_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RollbackRecord {
     pub rollback_id: u64,
     pub from_topology_snapshot_id: u64,
@@ -963,6 +963,141 @@ impl TopologyProposal {
             },
         ))
     }
+}
+
+pub fn write_topology_proposals_jsonl<'a, I, P>(
+    path: P,
+    proposals: I,
+) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a TopologyProposal>,
+    P: AsRef<Path>,
+{
+    let proposals = proposals.into_iter().collect::<Vec<_>>();
+    validate_unique_topology_proposal_ids(proposals.iter().copied())?;
+
+    let file = File::create(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for proposal in proposals {
+        serde_json::to_writer(&mut writer, proposal).map_err(|source| LoomModelError::Json {
+            line: None,
+            source: source.to_string(),
+        })?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| LoomModelError::Io {
+                path: path.as_ref().display().to_string(),
+                source: source.to_string(),
+            })?;
+    }
+
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+pub fn read_topology_proposals_jsonl<P>(
+    path: P,
+) -> Result<Vec<TopologyProposal>, LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let reader = BufReader::new(file);
+    let mut proposals = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line.map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let proposal: TopologyProposal =
+            serde_json::from_str(&line).map_err(|source| LoomModelError::Json {
+                line: Some(line_number),
+                source: source.to_string(),
+            })?;
+        proposals.push(proposal);
+    }
+
+    validate_unique_topology_proposal_ids(proposals.iter())?;
+
+    Ok(proposals)
+}
+
+pub fn append_topology_proposal_jsonl<P>(
+    path: P,
+    proposal: &TopologyProposal,
+) -> Result<(), LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let mut proposals = if path.as_ref().exists() {
+        read_topology_proposals_jsonl(path.as_ref())?
+    } else {
+        Vec::new()
+    };
+    proposals.push(proposal.clone());
+    validate_unique_topology_proposal_ids(proposals.iter())?;
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_ref())
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    let mut writer = BufWriter::new(file);
+
+    serde_json::to_writer(&mut writer, proposal).map_err(|source| LoomModelError::Json {
+        line: None,
+        source: source.to_string(),
+    })?;
+    writer
+        .write_all(b"\n")
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+fn validate_unique_topology_proposal_ids<'a, I>(proposals: I) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a TopologyProposal>,
+{
+    let mut topology_proposal_ids = HashSet::new();
+
+    for proposal in proposals {
+        if !topology_proposal_ids.insert(proposal.topology_proposal_id) {
+            return Err(LoomModelError::DuplicateTopologyProposalId(
+                proposal.topology_proposal_id,
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -1186,6 +1321,7 @@ pub enum LoomModelError {
     MissingRouteCandidate(u64),
     DuplicatePacketId(u64),
     DuplicateEvaluationId(u64),
+    DuplicateTopologyProposalId(u64),
     InvalidStateTransition {
         from: &'static str,
         to: &'static str,
@@ -1223,6 +1359,9 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicateEvaluationId(evaluation_id) => {
                 write!(f, "duplicate evaluation fixture id {evaluation_id}")
+            }
+            Self::DuplicateTopologyProposalId(topology_proposal_id) => {
+                write!(f, "duplicate topology proposal id {topology_proposal_id}")
             }
             Self::InvalidStateTransition { from, to } => {
                 write!(f, "cannot transition topology proposal from {from} to {to}")
