@@ -782,6 +782,55 @@ pub struct TopologySnapshot {
     pub created_at_ms: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RollbackRecord {
+    pub rollback_id: u64,
+    pub from_topology_snapshot_id: u64,
+    pub to_topology_snapshot_id: u64,
+    pub reason: String,
+    pub triggered_by_ref: String,
+    pub affected_route_decision_refs: Vec<String>,
+    pub created_at_ms: u64,
+}
+
+impl RollbackRecord {
+    pub fn new(
+        rollback_id: u64,
+        from_topology_snapshot_id: u64,
+        to_topology_snapshot_id: u64,
+        reason: impl Into<String>,
+        triggered_by_ref: impl Into<String>,
+        affected_route_decision_refs: Vec<String>,
+        created_at_ms: u64,
+    ) -> Result<Self, LoomModelError> {
+        let reason = reason.into();
+        let triggered_by_ref = triggered_by_ref.into();
+        ensure_not_empty("reason", &reason)?;
+        ensure_not_empty("triggered_by_ref", &triggered_by_ref)?;
+        ensure_not_empty_collection(
+            "affected_route_decision_refs",
+            &affected_route_decision_refs,
+        )?;
+
+        if to_topology_snapshot_id == from_topology_snapshot_id {
+            return Err(LoomModelError::InvalidNumericField {
+                field: "to_topology_snapshot_id",
+                reason: "must differ from from_topology_snapshot_id",
+            });
+        }
+
+        Ok(Self {
+            rollback_id,
+            from_topology_snapshot_id,
+            to_topology_snapshot_id,
+            reason,
+            triggered_by_ref,
+            affected_route_decision_refs,
+            created_at_ms,
+        })
+    }
+}
+
 impl TopologyProposal {
     pub fn draft(
         topology_proposal_id: u64,

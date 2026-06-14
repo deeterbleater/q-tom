@@ -2,7 +2,8 @@ use qtom_core::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, GradientAxis,
     GradientSpace, IntegrationGroup, IntegrationReport, IntegrationStatus, JoinPolicy,
     LoomModelError, MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
-    TopologyProposal, TopologyProposalKind, TopologyProposalStatus, TopologySnapshotStatus,
+    RollbackRecord, TopologyProposal, TopologyProposalKind, TopologyProposalStatus,
+    TopologySnapshotStatus,
 };
 
 #[test]
@@ -759,6 +760,79 @@ fn topology_commit_requires_snapshot_versions_and_forward_time() {
         LoomModelError::InvalidNumericField {
             field: "updated_at_ms",
             reason: "must be greater than the current update time",
+        }
+    );
+}
+
+#[test]
+fn rollback_record_preserves_snapshot_reversal_evidence() {
+    let record = RollbackRecord::new(
+        10_000,
+        9_000,
+        8_999,
+        "candidate recall fell below threshold",
+        "monitor://candidate-recall",
+        vec![
+            "inline://route-decision/500".to_string(),
+            "inline://route-decision/501".to_string(),
+        ],
+        53_000,
+    )
+    .expect("rollback record should be valid");
+
+    assert_eq!(record.rollback_id, 10_000);
+    assert_eq!(record.from_topology_snapshot_id, 9_000);
+    assert_eq!(record.to_topology_snapshot_id, 8_999);
+    assert_eq!(record.reason, "candidate recall fell below threshold");
+    assert_eq!(record.triggered_by_ref, "monitor://candidate-recall");
+    assert_eq!(record.affected_route_decision_refs.len(), 2);
+    assert_eq!(record.created_at_ms, 53_000);
+}
+
+#[test]
+fn rollback_record_rejects_missing_evidence_and_self_rollback() {
+    let missing_reason = RollbackRecord::new(
+        10_000,
+        9_000,
+        8_999,
+        " ",
+        "monitor://candidate-recall",
+        vec!["inline://route-decision/500".to_string()],
+        53_000,
+    )
+    .expect_err("rollback should include a reason");
+    assert_eq!(missing_reason, LoomModelError::EmptyField("reason"));
+
+    let missing_routes = RollbackRecord::new(
+        10_000,
+        9_000,
+        8_999,
+        "candidate recall fell below threshold",
+        "monitor://candidate-recall",
+        vec![],
+        53_000,
+    )
+    .expect_err("rollback should preserve affected route refs");
+    assert_eq!(
+        missing_routes,
+        LoomModelError::EmptyCollection("affected_route_decision_refs")
+    );
+
+    let self_rollback = RollbackRecord::new(
+        10_000,
+        9_000,
+        9_000,
+        "candidate recall fell below threshold",
+        "monitor://candidate-recall",
+        vec!["inline://route-decision/500".to_string()],
+        53_000,
+    )
+    .expect_err("rollback should target a different snapshot");
+    assert_eq!(
+        self_rollback,
+        LoomModelError::InvalidNumericField {
+            field: "to_topology_snapshot_id",
+            reason: "must differ from from_topology_snapshot_id",
         }
     );
 }

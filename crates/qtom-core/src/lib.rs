@@ -37,7 +37,7 @@ pub use loom_model::{
     AgentDecommissionPacket, ArtifactRef, DependencyEdge, DependencyKind, EvaluationFixture,
     EvaluatorConfig, GradientAxis, GradientSpace, IntegrationGroup, IntegrationReport,
     IntegrationStatus, JoinPolicy, LoomModelError, MemoryCandidate, MemoryCandidateReport,
-    MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
+    MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, RollbackRecord, TaskEnvelope,
     TopologyProposal, TopologyProposalKind, TopologyProposalStatus, TopologySnapshot,
     TopologySnapshotStatus,
     append_decommission_packet_jsonl, append_evaluation_fixture_jsonl,
