@@ -430,6 +430,34 @@ fn mvp_review_gate_covers_exit_decision() {
 }
 
 #[test]
+fn architecture_tracks_current_evidence_gate_status() {
+    let architecture_path = repo_root().join("docs/architecture.md");
+    let architecture = fs::read_to_string(&architecture_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", architecture_path.display()));
+    let architecture = architecture.to_lowercase();
+
+    let required_terms = [
+        "evidence gate status",
+        "cleared",
+        "partial",
+        "open",
+        "mock loom event log",
+        "mock evaluator fixture",
+        "candidate reduction report",
+        "hard-mask violation rate",
+        "local agent usefulness",
+        "governance safety",
+    ];
+
+    for term in required_terms {
+        assert!(
+            architecture.contains(term),
+            "architecture doc should track evidence gate status term `{term}`"
+        );
+    }
+}
+
+#[test]
 fn architecture_doc_consolidates_outline() {
     let architecture_path = repo_root().join("docs/architecture.md");
     let architecture = fs::read_to_string(&architecture_path)

@@ -304,7 +304,23 @@ Replay requires:
 
 Determinism does not mean the system cannot be fuzzy. It means the fuzziness is explicit, deterministic, and inspectable.
 
-## 14. Evaluation And Benchmarking
+## 14. Evidence Gate Status
+
+The architecture is promoted claim by claim. Current gate status:
+
+| Gate | Status | Current Evidence | Remaining Work |
+| --- | --- | --- | --- |
+| Route parity | Cleared for current CPU truth and narrow backend parity checks. | Golden fixture tests, CPU oracle tests, and backend parity reports. | Broaden parity evidence as more CUDA shapes and candidate-set paths are supported. |
+| Route explainability | Cleared for mock loom assignments. | `route_decision_recorded` events cause `task_assigned` events, with replay validation checking task, root, and correlation context. | Keep the same contract when real runtime roles replace mocks. |
+| Loom replay | Cleared for the mock SBJR run. | The checked-in mock loom event log round-trips through JSONL and produces a replay report from events only. | Add durable storage benchmarks before moving beyond JSONL. |
+| Join correctness | Cleared for mock integration groups. | Integration-group projection and validation link parent tasks, child tasks, join policy, integration reports, and integration agents. | Add repair-loop cases. |
+| Memory evidence | Cleared for decommission-to-memory lineage. | Decommission packets are persisted as canonical evidence, memory nodes preserve evidence refs, and memory lineage projection reads from replay events. | Add richer memory typing and placement disagreement checks. |
+| Candidate reduction | Partial. | The candidate reduction report, `MemoryCandidateReport`, records total placements, hard-mask survivors, radius matches, returned candidates, target status, hard-mask violation rate, and scanned-candidate reduction. | Measure recall and p99 latency against exact full-scan routing before trusting candidate reduction without fallback. |
+| Evaluator scaffolding | Cleared for stored fixtures. | The checked-in mock evaluator fixture preserves evaluator model, rubric version, prompt version, scoring schema version, seed, task ID, artifact refs, score, and rationale. | Add real evaluator API invocation behind configuration only after local-agent readiness gates pass. |
+| Local agent usefulness | Open. | No Qwen-backed role has been promoted yet. | Prove prompt/tool/MCP/memory profile differences with versioned evaluator fixtures. |
+| Governance safety | Open. | Governance policy is documented. | Add proposal, shadow-routing, canary, commit, and rollback fixtures. |
+
+## 15. Evaluation And Benchmarking
 
 Evaluation has two jobs:
 
@@ -326,7 +342,7 @@ Routing benchmarks should report:
 
 The current routing benchmark evidence lives in `docs/benchmark-ledger.md`.
 
-## 15. Observability
+## 16. Observability
 
 Observability should make the loom understandable from stored events.
 
@@ -343,7 +359,7 @@ Required projections:
 
 Metrics should include deadlocks, blocked tasks, route churn, fallback rate, repair tasks, integration failures, and memory retrieval quality.
 
-## 16. Security And Governance
+## 17. Security And Governance
 
 The security posture starts with hard constraints:
 
@@ -360,7 +376,7 @@ Hard constraints are evaluated before approximate candidate generation. Any prop
 
 Governance records must preserve who or what proposed a change, what evidence supported it, how it was tested, who approved it, what snapshot committed it, and how it can be rolled back.
 
-## 17. Scaling Strategy
+## 18. Scaling Strategy
 
 Scaling should proceed in stages:
 
@@ -375,7 +391,7 @@ Stage F  Cluster-capable swarm
 
 Do not jump to cluster behavior until local replay, lineage, memory curation, and topology governance work.
 
-## 18. MVP Plan
+## 19. MVP Plan
 
 The MVP plan is:
 
@@ -393,7 +409,7 @@ See `docs/mvp-roadmap.md`.
 
 The process for promoting design intent into working architecture is defined in `docs/formal-architecture-process.md`.
 
-## 19. Risks And Open Questions
+## 20. Risks And Open Questions
 
 Key risks:
 
