@@ -150,8 +150,17 @@ fn topology_governance_projection_is_derived_from_topology_events() {
     .expect("shadow should append");
     log.append(caused_by(
         event(
-            LoomEventType::TopologyCommitted,
+            LoomEventType::TopologyCanaried,
             3,
+            "inline://topology/canary-report/8000",
+        ),
+        2,
+    ))
+    .expect("canary should append");
+    log.append(caused_by(
+        event(
+            LoomEventType::TopologyCommitted,
+            4,
             "inline://topology/snapshot/9000",
         ),
         1,
@@ -160,10 +169,10 @@ fn topology_governance_projection_is_derived_from_topology_events() {
     log.append(caused_by(
         event(
             LoomEventType::TopologyRolledBack,
-            4,
+            5,
             "inline://topology/rollback/10000",
         ),
-        3,
+        4,
     ))
     .expect("rollback should append");
 
@@ -172,11 +181,13 @@ fn topology_governance_projection_is_derived_from_topology_events() {
     assert!(projection.starts_with("flowchart TD\n"));
     assert!(projection.contains("topology_proposed_1[\"TopologyProposed 8000\"]"));
     assert!(projection.contains("topology_shadowed_2[\"TopologyShadowed 8000\"]"));
-    assert!(projection.contains("topology_committed_3[\"TopologyCommitted 9003\"]"));
-    assert!(projection.contains("topology_rolled_back_4[\"TopologyRolledBack 9004\"]"));
+    assert!(projection.contains("topology_canaried_3[\"TopologyCanaried 8000\"]"));
+    assert!(projection.contains("topology_committed_4[\"TopologyCommitted 9004\"]"));
+    assert!(projection.contains("topology_rolled_back_5[\"TopologyRolledBack 9005\"]"));
     assert!(projection.contains("topology_proposed_1 --> topology_shadowed_2"));
-    assert!(projection.contains("topology_proposed_1 --> topology_committed_3"));
-    assert!(projection.contains("topology_committed_3 --> topology_rolled_back_4"));
+    assert!(projection.contains("topology_shadowed_2 --> topology_canaried_3"));
+    assert!(projection.contains("topology_proposed_1 --> topology_committed_4"));
+    assert!(projection.contains("topology_committed_4 --> topology_rolled_back_5"));
 }
 
 #[test]

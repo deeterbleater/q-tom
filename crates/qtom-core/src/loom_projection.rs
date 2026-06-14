@@ -355,6 +355,7 @@ pub fn topology_governance_projection(log: &InMemoryEventLog) -> String {
                 event.event_type,
                 LoomEventType::TopologyProposed
                     | LoomEventType::TopologyShadowed
+                    | LoomEventType::TopologyCanaried
                     | LoomEventType::TopologyCommitted
                     | LoomEventType::TopologyRolledBack
             )
@@ -389,6 +390,7 @@ fn topology_node_id(event: &LoomEvent) -> String {
     match event.event_type {
         LoomEventType::TopologyProposed => format!("topology_proposed_{}", event.event_id),
         LoomEventType::TopologyShadowed => format!("topology_shadowed_{}", event.event_id),
+        LoomEventType::TopologyCanaried => format!("topology_canaried_{}", event.event_id),
         LoomEventType::TopologyCommitted => format!("topology_committed_{}", event.event_id),
         LoomEventType::TopologyRolledBack => format!("topology_rolled_back_{}", event.event_id),
         _ => format!("topology_event_{}", event.event_id),
@@ -402,6 +404,9 @@ fn topology_label(event: &LoomEvent) -> String {
         }
         LoomEventType::TopologyShadowed => {
             format!("TopologyShadowed {}", ref_tail(event.payload_ref.as_str()))
+        }
+        LoomEventType::TopologyCanaried => {
+            format!("TopologyCanaried {}", ref_tail(event.payload_ref.as_str()))
         }
         LoomEventType::TopologyCommitted => {
             let snapshot_id = event
