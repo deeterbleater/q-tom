@@ -142,6 +142,7 @@ fn event_vocabulary_covers_replay_events() {
         "route_decision_recorded",
         "topology_proposed",
         "topology_committed",
+        "topology_rolled_back",
     ];
 
     for event_name in required_events {

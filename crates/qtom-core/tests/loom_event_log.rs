@@ -330,6 +330,51 @@ fn topology_committed_requires_snapshot_id() {
 }
 
 #[test]
+fn topology_rolled_back_requires_snapshot_id() {
+    let mut log = InMemoryEventLog::new();
+    log.append(event(LoomEventType::TopologyProposed, 1, 0))
+        .expect("topology_proposed should append");
+    log.append(caused_by(event(LoomEventType::TopologyCommitted, 2, 0), 1))
+        .expect("topology_committed should append");
+
+    let mut invalid = caused_by(event(LoomEventType::TopologyRolledBack, 3, 0), 2);
+    invalid.topology_snapshot_id = None;
+
+    let err = log
+        .append(invalid)
+        .expect_err("topology_rolled_back should require topology snapshot id");
+
+    assert_eq!(
+        err,
+        LoomEventError::MissingRequiredField {
+            event_type: LoomEventType::TopologyRolledBack,
+            field: "topology_snapshot_id",
+        }
+    );
+}
+
+#[test]
+fn topology_rolled_back_requires_committed_causation() {
+    let mut log = InMemoryEventLog::new();
+    log.append(event(LoomEventType::TopologyProposed, 1, 0))
+        .expect("topology_proposed should append");
+
+    let err = log
+        .append(caused_by(event(LoomEventType::TopologyRolledBack, 2, 0), 1))
+        .expect_err("topology_rolled_back should be caused by a topology commit");
+
+    assert_eq!(
+        err,
+        LoomEventError::InvalidCausationType {
+            event_type: LoomEventType::TopologyRolledBack,
+            causation_id: 1,
+            expected: LoomEventType::TopologyCommitted,
+            actual: LoomEventType::TopologyProposed,
+        }
+    );
+}
+
+#[test]
 fn replay_validation_reports_event_counts() {
     let mut log = InMemoryEventLog::new();
 
@@ -371,6 +416,8 @@ fn replay_validation_reports_lifecycle_counts() {
         .expect("topology_proposed should append");
     log.append(caused_by(event(LoomEventType::TopologyCommitted, 8, 0), 7))
         .expect("topology_committed should append");
+    log.append(caused_by(event(LoomEventType::TopologyRolledBack, 9, 0), 8))
+        .expect("topology_rolled_back should append");
 
     let report = log.validate_replay().expect("replay should validate");
 
@@ -380,6 +427,7 @@ fn replay_validation_reports_lifecycle_counts() {
     assert_eq!(report.decommission_count, 1);
     assert_eq!(report.memory_node_count, 1);
     assert_eq!(report.topology_commit_count, 1);
+    assert_eq!(report.topology_rollback_count, 1);
 }
 
 #[test]

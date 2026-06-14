@@ -388,7 +388,28 @@ committed_by_ref
 
 **Replay note:** Route decisions after this event may reference the new topology snapshot. Older route decisions remain tied to their original snapshot.
 
-## 18. Event Ordering Rules
+## 18. topology_rolled_back
+
+Emitted when governance rolls future routing back from a failed topology snapshot to a previous known-good snapshot.
+
+**Producer:** Governance Layer.
+
+**Consumer:** Q-TOM Router, Agent Task Loom, Memory and Curator Layer, Observability Layer.
+
+**Payload:**
+
+```text
+rollback_id
+from_topology_snapshot_id
+to_topology_snapshot_id
+reason
+triggered_by_ref
+affected_route_decision_refs
+```
+
+**Replay note:** Must reference the restored `topology_snapshot_id` and be caused by a prior `topology_committed` event. Rollback changes future routing truth but does not delete route decisions made under the rolled-back snapshot.
+
+## 19. Event Ordering Rules
 
 - `task_assigned` requires a prior `route_decision_recorded`.
 - `artifact_ready` requires a prior `artifact_declared`.
@@ -397,10 +418,11 @@ committed_by_ref
 - `memory_node_created` requires at least one evidence reference.
 - `index_updated` requires a version change.
 - `topology_committed` requires a prior `topology_proposed`.
+- `topology_rolled_back` requires a prior `topology_committed`.
 
 These rules should become simulator assertions before real agents are introduced.
 
-## 19. Replay Requirements
+## 20. Replay Requirements
 
 A replay engine should be able to reconstruct:
 
@@ -416,7 +438,7 @@ A replay engine should be able to reconstruct:
 
 Replay does not need to re-run LLM inference by default. It must reconstruct the event graph and detect when referenced content, topology, route policy, or live-state snapshots are missing.
 
-## 20. Open Event Questions
+## 21. Open Event Questions
 
 - Should `task_failed` be separate from `task_completed` with failed status?
 - Should topology shadow and canary events exist in the first MVP or wait for governance implementation?

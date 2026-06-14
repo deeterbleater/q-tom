@@ -83,7 +83,9 @@ fn requires_agent_id(event_type: LoomEventType) -> bool {
 fn requires_topology_snapshot_id(event_type: LoomEventType) -> bool {
     matches!(
         event_type,
-        LoomEventType::RouteDecisionRecorded | LoomEventType::TopologyCommitted
+        LoomEventType::RouteDecisionRecorded
+            | LoomEventType::TopologyCommitted
+            | LoomEventType::TopologyRolledBack
     )
 }
 
@@ -104,6 +106,7 @@ pub enum LoomEventType {
     RouteDecisionRecorded,
     TopologyProposed,
     TopologyCommitted,
+    TopologyRolledBack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,6 +331,7 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
     let mut decommission_count = 0;
     let mut memory_node_count = 0;
     let mut topology_commit_count = 0;
+    let mut topology_rollback_count = 0;
     let mut integration_request_count = 0;
     let mut completed_task_events_by_task_id = HashMap::new();
     let mut decommission_events_by_task_id = HashMap::new();
@@ -375,6 +379,7 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
             }
             LoomEventType::MemoryNodeCreated => memory_node_count += 1,
             LoomEventType::TopologyCommitted => topology_commit_count += 1,
+            LoomEventType::TopologyRolledBack => topology_rollback_count += 1,
             LoomEventType::IntegrationRequested => {
                 integration_request_count += 1;
                 if let Some(task_id) = event.task_id {
@@ -434,6 +439,7 @@ pub fn validate_events(events: &[LoomEvent]) -> Result<ReplayValidationReport, L
         decommission_count,
         memory_node_count,
         topology_commit_count,
+        topology_rollback_count,
         integration_request_count,
     })
 }
@@ -713,6 +719,7 @@ pub struct ReplayValidationReport {
     pub decommission_count: usize,
     pub memory_node_count: usize,
     pub topology_commit_count: usize,
+    pub topology_rollback_count: usize,
     pub integration_request_count: usize,
 }
 
@@ -722,6 +729,7 @@ fn required_cause(event_type: LoomEventType) -> Option<LoomEventType> {
         LoomEventType::ArtifactReady => Some(LoomEventType::ArtifactDeclared),
         LoomEventType::TaskResumed => Some(LoomEventType::TaskBlocked),
         LoomEventType::TopologyCommitted => Some(LoomEventType::TopologyProposed),
+        LoomEventType::TopologyRolledBack => Some(LoomEventType::TopologyCommitted),
         _ => None,
     }
 }
