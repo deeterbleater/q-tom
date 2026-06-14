@@ -38,8 +38,9 @@ pub use loom_model::{
     EvaluatorConfig, GradientAxis, GradientSpace, IntegrationGroup, IntegrationReport,
     IntegrationStatus, JoinPolicy, LoomModelError, MemoryCandidate, MemoryCandidateReport,
     MemoryNode, MemoryNodeKind, MemoryPlacement, PlanNode, TaskEnvelope,
-    append_decommission_packet_jsonl,
+    append_decommission_packet_jsonl, append_evaluation_fixture_jsonl,
     read_decommission_packets_jsonl, write_decommission_packets_jsonl,
+    read_evaluation_fixtures_jsonl, write_evaluation_fixtures_jsonl,
 };
 pub use loom_projection::{
     LoomProjectionBundle, LoomReplayReport, artifact_provenance_projection,

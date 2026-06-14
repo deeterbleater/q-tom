@@ -695,7 +695,7 @@ pub struct MemoryCandidateReport {
     pub candidates: Vec<MemoryCandidate>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluatorConfig {
     pub model: String,
     pub rubric_version: String,
@@ -734,7 +734,7 @@ impl EvaluatorConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct EvaluationFixture {
     pub evaluation_id: u64,
     pub evaluator: EvaluatorConfig,
@@ -775,6 +775,139 @@ impl EvaluationFixture {
     }
 }
 
+pub fn write_evaluation_fixtures_jsonl<'a, I, P>(
+    path: P,
+    fixtures: I,
+) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a EvaluationFixture>,
+    P: AsRef<Path>,
+{
+    let fixtures = fixtures.into_iter().collect::<Vec<_>>();
+    validate_unique_evaluation_ids(fixtures.iter().copied())?;
+
+    let file = File::create(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for fixture in fixtures {
+        serde_json::to_writer(&mut writer, fixture).map_err(|source| LoomModelError::Json {
+            line: None,
+            source: source.to_string(),
+        })?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| LoomModelError::Io {
+                path: path.as_ref().display().to_string(),
+                source: source.to_string(),
+            })?;
+    }
+
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+pub fn read_evaluation_fixtures_jsonl<P>(
+    path: P,
+) -> Result<Vec<EvaluationFixture>, LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref()).map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+    let reader = BufReader::new(file);
+    let mut fixtures = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line.map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let fixture: EvaluationFixture =
+            serde_json::from_str(&line).map_err(|source| LoomModelError::Json {
+                line: Some(line_number),
+                source: source.to_string(),
+            })?;
+        fixtures.push(fixture);
+    }
+
+    validate_unique_evaluation_ids(fixtures.iter())?;
+
+    Ok(fixtures)
+}
+
+pub fn append_evaluation_fixture_jsonl<P>(
+    path: P,
+    fixture: &EvaluationFixture,
+) -> Result<(), LoomModelError>
+where
+    P: AsRef<Path>,
+{
+    let mut fixtures = if path.as_ref().exists() {
+        read_evaluation_fixtures_jsonl(path.as_ref())?
+    } else {
+        Vec::new()
+    };
+    fixtures.push(fixture.clone());
+    validate_unique_evaluation_ids(fixtures.iter())?;
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_ref())
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    let mut writer = BufWriter::new(file);
+
+    serde_json::to_writer(&mut writer, fixture).map_err(|source| LoomModelError::Json {
+        line: None,
+        source: source.to_string(),
+    })?;
+    writer
+        .write_all(b"\n")
+        .map_err(|source| LoomModelError::Io {
+            path: path.as_ref().display().to_string(),
+            source: source.to_string(),
+        })?;
+    writer.flush().map_err(|source| LoomModelError::Io {
+        path: path.as_ref().display().to_string(),
+        source: source.to_string(),
+    })?;
+
+    Ok(())
+}
+
+fn validate_unique_evaluation_ids<'a, I>(fixtures: I) -> Result<(), LoomModelError>
+where
+    I: IntoIterator<Item = &'a EvaluationFixture>,
+{
+    let mut evaluation_ids = HashSet::new();
+
+    for fixture in fixtures {
+        if !evaluation_ids.insert(fixture.evaluation_id) {
+            return Err(LoomModelError::DuplicateEvaluationId(fixture.evaluation_id));
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoomModelError {
     EmptyField(&'static str),
@@ -782,6 +915,7 @@ pub enum LoomModelError {
     MissingTaskArtifact(u64),
     MissingRouteCandidate(u64),
     DuplicatePacketId(u64),
+    DuplicateEvaluationId(u64),
     InvalidNumericField {
         field: &'static str,
         reason: &'static str,
@@ -812,6 +946,9 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicatePacketId(packet_id) => {
                 write!(f, "duplicate decommission packet id {packet_id}")
+            }
+            Self::DuplicateEvaluationId(evaluation_id) => {
+                write!(f, "duplicate evaluation fixture id {evaluation_id}")
             }
             Self::InvalidNumericField { field, reason } => {
                 write!(f, "`{field}` {reason}")
