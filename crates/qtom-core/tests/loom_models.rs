@@ -556,6 +556,70 @@ fn topology_proposal_requires_test_evidence_and_forward_time() {
     );
 }
 
+#[test]
+fn topology_proposal_moves_to_shadowed_with_shadow_evidence() {
+    let tested = tested_topology_proposal();
+
+    let shadowed = tested
+        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 51_000)
+        .expect("tested proposal should accept shadow evidence");
+
+    assert_eq!(shadowed.status, TopologyProposalStatus::Shadowed);
+    assert_eq!(
+        shadowed.shadow_report_refs,
+        vec!["inline://shadow-routing/report/8000".to_string()]
+    );
+    assert_eq!(
+        shadowed.benchmark_report_refs,
+        vec!["inline://benchmark/report/8000".to_string()]
+    );
+    assert_eq!(shadowed.updated_at_ms, 51_000);
+    assert!(shadowed.canary_report_refs.is_empty());
+}
+
+#[test]
+fn topology_proposal_requires_tested_state_before_shadowing() {
+    let err = topology_proposal()
+        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 51_000)
+        .expect_err("draft proposal should not be shadowed");
+
+    assert_eq!(
+        err,
+        LoomModelError::InvalidStateTransition {
+            from: "Drafted",
+            to: "Shadowed",
+        }
+    );
+}
+
+#[test]
+fn topology_proposal_requires_shadow_evidence_and_forward_time() {
+    let missing_shadow = tested_topology_proposal()
+        .mark_shadowed(vec![], 51_000)
+        .expect_err("shadowed proposal should include shadow reports");
+    assert_eq!(
+        missing_shadow,
+        LoomModelError::EmptyCollection("shadow_report_refs")
+    );
+
+    let stale_time = tested_topology_proposal()
+        .mark_shadowed(vec!["inline://shadow-routing/report/8000".to_string()], 50_500)
+        .expect_err("shadowed proposal should move time forward");
+    assert_eq!(
+        stale_time,
+        LoomModelError::InvalidNumericField {
+            field: "updated_at_ms",
+            reason: "must be greater than the current update time",
+        }
+    );
+}
+
+fn tested_topology_proposal() -> TopologyProposal {
+    topology_proposal()
+        .mark_tested(vec!["inline://benchmark/report/8000".to_string()], 50_500)
+        .expect("proposal should be tested")
+}
+
 fn topology_proposal() -> TopologyProposal {
     TopologyProposal::draft(
         8_000,

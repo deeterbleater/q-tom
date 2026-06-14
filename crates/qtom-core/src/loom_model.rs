@@ -730,6 +730,21 @@ pub enum TopologyProposalStatus {
     Superseded,
 }
 
+impl TopologyProposalStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Drafted => "Drafted",
+            Self::Tested => "Tested",
+            Self::Shadowed => "Shadowed",
+            Self::Canaried => "Canaried",
+            Self::Approved => "Approved",
+            Self::Committed => "Committed",
+            Self::Rejected => "Rejected",
+            Self::Superseded => "Superseded",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TopologyProposal {
     pub topology_proposal_id: u64,
@@ -787,6 +802,26 @@ impl TopologyProposal {
 
         self.benchmark_report_refs = benchmark_report_refs;
         self.status = TopologyProposalStatus::Tested;
+        self.updated_at_ms = updated_at_ms;
+
+        Ok(self)
+    }
+
+    pub fn mark_shadowed(
+        mut self,
+        shadow_report_refs: Vec<String>,
+        updated_at_ms: u64,
+    ) -> Result<Self, LoomModelError> {
+        ensure_status(
+            self.status,
+            TopologyProposalStatus::Tested,
+            TopologyProposalStatus::Shadowed,
+        )?;
+        ensure_not_empty_collection("shadow_report_refs", &shadow_report_refs)?;
+        ensure_increasing_timestamp(self.updated_at_ms, updated_at_ms)?;
+
+        self.shadow_report_refs = shadow_report_refs;
+        self.status = TopologyProposalStatus::Shadowed;
         self.updated_at_ms = updated_at_ms;
 
         Ok(self)
@@ -1014,6 +1049,10 @@ pub enum LoomModelError {
     MissingRouteCandidate(u64),
     DuplicatePacketId(u64),
     DuplicateEvaluationId(u64),
+    InvalidStateTransition {
+        from: &'static str,
+        to: &'static str,
+    },
     InvalidNumericField {
         field: &'static str,
         reason: &'static str,
@@ -1047,6 +1086,9 @@ impl std::fmt::Display for LoomModelError {
             }
             Self::DuplicateEvaluationId(evaluation_id) => {
                 write!(f, "duplicate evaluation fixture id {evaluation_id}")
+            }
+            Self::InvalidStateTransition { from, to } => {
+                write!(f, "cannot transition topology proposal from {from} to {to}")
             }
             Self::InvalidNumericField { field, reason } => {
                 write!(f, "`{field}` {reason}")
@@ -1088,6 +1130,21 @@ fn ensure_increasing_timestamp(current: u64, next: u64) -> Result<(), LoomModelE
         Err(LoomModelError::InvalidNumericField {
             field: "updated_at_ms",
             reason: "must be greater than the current update time",
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_status(
+    actual: TopologyProposalStatus,
+    expected: TopologyProposalStatus,
+    next: TopologyProposalStatus,
+) -> Result<(), LoomModelError> {
+    if actual != expected {
+        Err(LoomModelError::InvalidStateTransition {
+            from: actual.label(),
+            to: next.label(),
         })
     } else {
         Ok(())
