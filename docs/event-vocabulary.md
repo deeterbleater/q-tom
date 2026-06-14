@@ -388,7 +388,31 @@ hard_constraint_violations
 
 **Replay note:** Must be caused by a prior `topology_proposed` event. Shadow routing is evidence, not routing truth; future route decisions continue to reference the active topology snapshot until a later commit.
 
-## 18. topology_committed
+## 18. topology_canaried
+
+Emitted when governance sends a bounded simulator or live traffic slice through a proposed topology.
+
+**Producer:** Governance Layer.
+
+**Consumer:** Governance Layer, Evaluation Layer, Observability Layer.
+
+**Payload:**
+
+```text
+topology_proposal_id
+proposed_topology_snapshot_ref
+canary_report_ref
+traffic_scope
+fallback_rate
+blocked_task_rate
+repair_task_rate
+rollback_triggered
+operator_notes_ref
+```
+
+**Replay note:** Must be caused by a prior `topology_shadowed` event. Canary routing is bounded evidence; it must not erase route decisions made under either the active or proposed topology.
+
+## 19. topology_committed
 
 Emitted when governance commits a topology proposal into an immutable snapshot.
 
@@ -412,7 +436,7 @@ committed_by_ref
 
 **Replay note:** Route decisions after this event may reference the new topology snapshot. Older route decisions remain tied to their original snapshot.
 
-## 19. topology_rolled_back
+## 20. topology_rolled_back
 
 Emitted when governance rolls future routing back from a failed topology snapshot to a previous known-good snapshot.
 
@@ -433,7 +457,7 @@ affected_route_decision_refs
 
 **Replay note:** Must reference the restored `topology_snapshot_id` and be caused by a prior `topology_committed` event. Rollback changes future routing truth but does not delete route decisions made under the rolled-back snapshot.
 
-## 20. Event Ordering Rules
+## 21. Event Ordering Rules
 
 - `task_assigned` requires a prior `route_decision_recorded`.
 - `artifact_ready` requires a prior `artifact_declared`.
@@ -442,12 +466,13 @@ affected_route_decision_refs
 - `memory_node_created` requires at least one evidence reference.
 - `index_updated` requires a version change.
 - `topology_shadowed` requires a prior `topology_proposed`.
+- `topology_canaried` requires a prior `topology_shadowed`.
 - `topology_committed` requires a prior `topology_proposed`.
 - `topology_rolled_back` requires a prior `topology_committed`.
 
 These rules should become simulator assertions before real agents are introduced.
 
-## 21. Replay Requirements
+## 22. Replay Requirements
 
 A replay engine should be able to reconstruct:
 
@@ -463,7 +488,7 @@ A replay engine should be able to reconstruct:
 
 Replay does not need to re-run LLM inference by default. It must reconstruct the event graph and detect when referenced content, topology, route policy, or live-state snapshots are missing.
 
-## 22. Open Event Questions
+## 23. Open Event Questions
 
 - Should `task_failed` be separate from `task_completed` with failed status?
 - Should topology shadow and canary events exist in the first MVP or wait for governance implementation?
