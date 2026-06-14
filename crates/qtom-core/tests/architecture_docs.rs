@@ -478,12 +478,13 @@ fn architecture_tracks_governance_safety_evidence() {
         "jsonl ledgers",
         "active_topology_snapshot",
         "apply_rollback",
+        "topologyshadowed",
+        "topologycanaried",
         "topologyrolledback",
         "topology governance projection",
         "unknown proposal",
         "unknown snapshot",
-        "shadow routing",
-        "canary",
+        "route-decision fixtures",
     ];
 
     for term in required_terms {
