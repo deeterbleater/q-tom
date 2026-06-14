@@ -5,6 +5,8 @@ use qtom_core::{
     read_evaluation_fixtures_jsonl, write_evaluation_fixtures_jsonl,
 };
 
+const GOLDEN_EVALUATOR_FIXTURE: &str = "tests/fixtures/mock_evaluator_fixtures.jsonl";
+
 fn temp_jsonl_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "qtom-evaluator-{name}-{}-{}.jsonl",
@@ -137,4 +139,22 @@ fn append_evaluation_fixture_rejects_duplicate_evaluation_id() {
     );
 
     fs::remove_file(path).ok();
+}
+
+#[test]
+fn checked_in_evaluator_fixture_matches_deterministic_fixture() {
+    let generated_path = temp_jsonl_path("golden");
+    let golden_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_EVALUATOR_FIXTURE);
+    let fixtures = vec![fixture(7_000, 11, 0.82), fixture(7_001, 12, 0.71)];
+
+    write_evaluation_fixtures_jsonl(&generated_path, &fixtures).expect("fixture should write");
+    let generated = fs::read_to_string(&generated_path).expect("generated fixture should exist");
+    let golden = fs::read_to_string(&golden_path).expect("golden fixture should exist");
+    let loaded = read_evaluation_fixtures_jsonl(&golden_path).expect("golden fixture should load");
+
+    assert_eq!(generated, golden);
+    assert_eq!(loaded, fixtures);
+
+    fs::remove_file(generated_path).ok();
 }
